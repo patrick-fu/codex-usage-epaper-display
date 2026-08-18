@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UsageInk 400×300 画面原型</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+      --paper: #f5eed8;
+      --ink: #151515;
+      --red: #bb2528;
+      --muted: #6f6a5d;
+      --panel: #18191d;
+      --line: #36383f;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #0d0e11;
+      color: #f3f3f5;
+    }
+
+    button, input, select { font: inherit; }
+    button, select, input[type="text"] {
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: #22242a;
+      color: #f5f5f6;
+    }
+
+    .page {
+      width: min(1120px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 28px 0 110px;
+    }
+
+    .prototype-note {
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+      color: #ffcf70;
+      font-size: 12px;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+
+    h1 { margin: 10px 0 8px; font-size: 30px; }
+    .lead { margin: 0; color: #a7aab2; line-height: 1.55; }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(470px, 1fr) 330px;
+      gap: 28px;
+      align-items: start;
+      margin-top: 28px;
+    }
+
+    .preview-stage {
+      min-height: 470px;
+      display: grid;
+      place-items: center;
+      padding: 28px;
+      border: 1px solid #292b31;
+      border-radius: 18px;
+      background:
+        radial-gradient(circle at 50% 35%, rgba(255,255,255,.07), transparent 44%),
+        #131418;
+    }
+
+    .device {
+      padding: 18px;
+      border-radius: 18px;
+      background: #e7e7e3;
+      box-shadow: 0 24px 70px rgba(0,0,0,.45), inset 0 0 0 1px #fff;
+    }
+
+    .screen {
+      width: 400px;
+      height: 300px;
+      overflow: hidden;
+      border: 2px solid #4a4a47;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: "Arial Narrow", "PingFang SC", sans-serif;
+      box-shadow: inset 0 0 18px rgba(70,60,30,.12);
+    }
+
+    .screen * { box-sizing: border-box; }
+    .red { color: var(--red); }
+    .paper-muted { color: var(--muted); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    .controls {
+      border: 1px solid #292b31;
+      border-radius: 18px;
+      background: var(--panel);
+      overflow: hidden;
+    }
+
+    .controls h2 {
+      margin: 0;
+      padding: 18px 20px 14px;
+      font-size: 16px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .control-body { padding: 16px 20px 20px; }
+    .field { margin-bottom: 15px; }
+    .field > label, .field-title {
+      display: block;
+      margin-bottom: 7px;
+      color: #b9bbc2;
+      font-size: 12px;
+    }
+    .field input[type="text"], .field select {
+      width: 100%;
+      padding: 9px 10px;
+    }
+    .check-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+    .check {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: #d9dae0;
+      font-size: 13px;
+    }
+    input[type="checkbox"] { accent-color: #e05a5f; }
+    input[type="range"] { width: 100%; accent-color: #e05a5f; }
+    .range-row { display: grid; grid-template-columns: 1fr 44px; gap: 10px; align-items: center; }
+    .range-value { text-align: right; color: #ff8589; font: 13px ui-monospace, monospace; }
+
+    details {
+      border-top: 1px solid var(--line);
+      padding: 12px 20px 16px;
+    }
+    summary { cursor: pointer; color: #b9bbc2; font-size: 12px; }
+    pre {
+      max-height: 180px;
+      overflow: auto;
+      margin: 12px 0 0;
+      color: #9ee0aa;
+      font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+      white-space: pre-wrap;
+    }
+
+    .switcher {
+      position: fixed;
+      left: 50%;
+      bottom: 24px;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: min(520px, calc(100% - 28px));
+      padding: 8px;
+      border: 1px solid #4a4d56;
+      border-radius: 999px;
+      background: rgba(28,30,35,.96);
+      box-shadow: 0 14px 45px rgba(0,0,0,.48);
+      transform: translateX(-50%);
+      backdrop-filter: blur(16px);
+    }
+    .switcher button {
+      width: 42px;
+      height: 38px;
+      border: 0;
+      border-radius: 999px;
+      cursor: pointer;
+      background: #343740;
+    }
+    .switcher button:hover { background: #484c57; }
+    .variant-label { flex: 1; text-align: center; }
+    .variant-label strong { display: block; font-size: 13px; }
+    .variant-label span { color: #9da0aa; font-size: 11px; }
+
+    /* Shared e-paper modules */
+    .quota-track { height: 11px; border: 2px solid var(--ink); }
+    .quota-fill { height: 100%; background: var(--ink); }
+    .quota-fill.danger { background: var(--red); }
+    .metric-label { font-size: 9px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
+    .metric-value { font: 900 25px/1 ui-monospace, monospace; letter-spacing: -.06em; }
+    .metric-unit { margin-left: 2px; font-size: 9px; letter-spacing: 0; }
+    .variant-a, .variant-b, .variant-c { height: 100%; }
+
+    /* Variant A — balanced stack */
+    .variant-a { display: grid; grid-template-rows: 38px 1fr 27px; padding: 11px 16px 9px; }
+    .a-head { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid var(--ink); }
+    .a-title { font-size: 17px; font-weight: 900; letter-spacing: -.02em; }
+    .a-plan { font: 700 10px ui-monospace, monospace; }
+    .a-body { display: grid; align-content: stretch; gap: 8px; padding: 8px 0 6px; }
+    .a-quotas { display: grid; align-content: center; gap: 6px; }
+    .a-quota { min-height: 44px; }
+    .a-quota-row { display: flex; align-items: end; justify-content: space-between; margin-bottom: 6px; }
+    .a-quota-label { font-size: 11px; font-weight: 900; }
+    .a-quota-value { font: 900 29px/1 ui-monospace, monospace; }
+    .a-reset { font-size: 9px; }
+    .a-metrics { display: grid; grid-template-columns: repeat(2, 1fr); border: 1px solid var(--ink); }
+    .a-metric { min-height: 45px; padding: 6px 9px; }
+    .a-metric:nth-child(even) { border-left: 1px solid var(--ink); }
+    .a-metric:nth-child(n+3) { border-top: 1px solid var(--ink); }
+    .a-footer { display: flex; justify-content: space-between; align-items: end; border-top: 1px solid var(--ink); font-size: 8px; }
+
+    /* Variant B — quota hero with a ticker strip */
+    .variant-b { display: grid; grid-template-rows: 38px 1fr 73px 26px; padding: 10px 14px 8px; }
+    .b-head { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--ink); }
+    .b-title { font-size: 13px; font-weight: 900; letter-spacing: .08em; }
+    .b-hero { display: flex; flex-direction: column; justify-content: center; }
+    .b-hero-row { display: flex; align-items: end; justify-content: space-between; }
+    .b-hero-label { font-size: 11px; font-weight: 900; }
+    .b-hero-value { font: 900 65px/.86 ui-monospace, monospace; letter-spacing: -.1em; }
+    .b-hero-reset { font-size: 9px; text-align: right; }
+    .b-strip { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); border-top: 2px solid var(--ink); border-bottom: 2px solid var(--ink); }
+    .b-metric { display: flex; min-width: 0; flex-direction: column; justify-content: center; overflow: hidden; padding: 7px 6px; white-space: nowrap; }
+    .b-metric + .b-metric { border-left: 1px solid var(--ink); }
+    .b-metric .metric-value { font-size: 21px; }
+    .b-footer { display: flex; align-items: end; justify-content: space-between; font-size: 8px; }
+
+    /* Variant C — local activity first */
+    .variant-c { display: grid; grid-template-rows: 31px 1fr 28px; padding: 10px 14px 8px; }
+    .c-head { display: flex; align-items: center; justify-content: space-between; }
+    .c-title { font-size: 11px; font-weight: 900; letter-spacing: .12em; }
+    .c-grid { display: grid; grid-template-columns: 1.25fr .75fr; border: 2px solid var(--ink); }
+    .c-primary { display: flex; flex-direction: column; justify-content: center; padding: 13px; }
+    .c-primary .metric-value { margin: 6px 0 11px; font-size: 43px; }
+    .c-secondary { display: grid; grid-auto-rows: 1fr; border-left: 2px solid var(--ink); }
+    .c-cell { display: flex; flex-direction: column; justify-content: center; padding: 8px 10px; }
+    .c-cell + .c-cell { border-top: 1px solid var(--ink); }
+    .c-cell .metric-value { font-size: 21px; }
+    .c-quota { margin-top: auto; padding-top: 8px; border-top: 1px solid var(--ink); }
+    .c-quota-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 5px; font-size: 9px; }
+    .c-footer { display: flex; justify-content: space-between; align-items: end; font-size: 8px; }
+
+    .missing {
+      display: flex;
+      min-height: 70px;
+      align-items: center;
+      justify-content: center;
+      border: 1px dashed var(--muted);
+      color: var(--muted);
+      font-size: 11px;
+      text-align: center;
+    }
+
+    @media (max-width: 900px) {
+      .workspace { grid-template-columns: 1fr; }
+      .controls { max-width: 520px; margin: 0 auto; width: 100%; }
+      .preview-stage { overflow-x: auto; justify-content: start; }
+    }
+  </style>
+</head>
+<body>
+  <!-- 三种 UsageInk Display Frame 结构，使用 ?variant=A|B|C 切换。抛弃式原型，不是产品代码。 -->
+  <main class="page">
+    <div class="prototype-note">◆ 抛弃式原型 · 仅用于决定画面与自定义边界</div>
+    <h1>UsageInk · 400×300 Display Frame</h1>
+    <p class="lead">切换三种信息层级。右侧控制项用于验证 V1 自定义是否够用；预览严格保持 400×300。</p>
+
+    <section class="workspace">
+      <div class="preview-stage">
+        <div class="device"><div id="screen" class="screen"></div></div>
+      </div>
+
+      <aside class="controls">
+        <h2>V1 自定义边界</h2>
+        <div class="control-body">
+          <div class="field">
+            <label for="title">自定义标题</label>
+            <input id="title" type="text" value="CODEX USAGE" maxlength="24">
+          </div>
+
+          <div class="field">
+            <span class="field-title">显示模块</span>
+            <div class="check-grid">
+              <label class="check"><input data-module="title" type="checkbox" checked> 标题</label>
+              <label class="check"><input data-module="plan" type="checkbox" checked> 套餐</label>
+              <label class="check"><input data-module="quota" type="checkbox" checked> 额度窗口</label>
+              <label class="check"><input data-module="today" type="checkbox" checked> 今日 Token</label>
+              <label class="check"><input data-module="weekTokens" type="checkbox" checked> 本周 Token</label>
+              <label class="check"><input data-module="cache" type="checkbox"> 缓存命中率</label>
+              <label class="check"><input data-module="tps" type="checkbox"> TPS</label>
+              <label class="check"><input data-module="updated" type="checkbox" checked> 更新时间</label>
+              <label class="check"><input data-module="status" type="checkbox" checked> 连接状态</label>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="order">信息重点</label>
+            <select id="order">
+              <option value="quota-first">额度优先</option>
+              <option value="tokens-first">Token 优先</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="quota-mode">账户额度窗口</label>
+            <select id="quota-mode">
+              <option value="weekly-only">仅周额度（当前状态）</option>
+              <option value="both">5 小时 + 周额度</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="tps-window">TPS 时间窗口</label>
+            <select id="tps-window">
+              <option value="3">过去 3 分钟</option>
+              <option value="15" selected>过去 15 分钟</option>
+              <option value="60">过去 60 分钟</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="date-format">重置时间</label>
+            <select id="date-format">
+              <option value="relative">相对时间：2 小时 14 分</option>
+              <option value="absolute">绝对时间：今天 23:38</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="accent">红色用途</label>
+            <select id="accent">
+              <option value="threshold">达到阈值时强调</option>
+              <option value="always">始终强调百分比</option>
+              <option value="off">关闭红色</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="threshold">红色阈值</label>
+            <div class="range-row">
+              <input id="threshold" type="range" min="50" max="100" value="80" step="5">
+              <span id="threshold-value" class="range-value">80%</span>
+            </div>
+          </div>
+        </div>
+        <details open>
+          <summary>当前完整配置状态</summary>
+          <pre id="state"></pre>
+        </details>
+      </aside>
+    </section>
+  </main>
+
+  <nav class="switcher" aria-label="原型方案切换">
+    <button id="previous" aria-label="上一个方案">←</button>
+    <div class="variant-label"><strong id="variant-name"></strong><span>键盘 ← → 也可切换</span></div>
+    <button id="next" aria-label="下一个方案">→</button>
+  </nav>
+
+  <script>
+    const variants = [
+      { key: 'A', name: '额度与 Token 均衡' },
+      { key: 'B', name: '周额度大字优先' },
+      { key: 'C', name: '本机活动优先' }
+    ];
+
+    const state = {
+      variant: new URLSearchParams(location.search).get('variant') || 'A',
+      title: 'CODEX USAGE',
+      modules: { title: true, plan: true, quota: true, today: true, weekTokens: true, cache: false, tps: false, updated: true, status: true },
+      order: 'quota-first',
+      quotaMode: 'weekly-only',
+      tpsWindow: 15,
+      dateFormat: 'relative',
+      accent: 'threshold',
+      redThreshold: 80,
+      sample: {
+        plan: 'PRO',
+        primary: { label: '5 小时', usedPercent: 43, resetRelative: '2 小时 14 分后重置', resetAbsolute: '今天 23:38 重置' },
+        weekly: { label: '周额度', usedPercent: 86, resetRelative: '5 天 2 小时后重置', resetAbsolute: '8 月 23 日 23:38 重置' },
+        todayTokens: '1.28M',
+        weekTokens: '7.94M',
+        cachePercent: 72,
+        tps: { 3: '8.4', 15: '6.8', 60: '3.1' },
+        updated: '21:45',
+        status: '已连接'
+      }
+    };
+
+    if (!variants.some(v => v.key === state.variant)) state.variant = 'A';
+
+    const $ = selector => document.querySelector(selector);
+    const escapeHTML = value => String(value).replace(/[&<>'"]/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' })[char]);
+    const resetText = window => state.dateFormat === 'relative' ? window.resetRelative : window.resetAbsolute;
+    const shouldRed = value => state.accent === 'always' || (state.accent === 'threshold' && value >= state.redThreshold);
+    const redClass = value => shouldRed(value) ? 'red' : '';
+    const fillClass = value => shouldRed(value) ? 'danger' : '';
+    const visibleWindows = () => state.modules.quota
+      ? (state.quotaMode === 'both' ? [state.sample.primary, state.sample.weekly] : [state.sample.weekly])
+      : [];
+
+    const metrics = () => [
+      state.modules.today && { key: 'today', label: '本机今日', value: state.sample.todayTokens, unit: 'TOKENS' },
+      state.modules.weekTokens && { key: 'week', label: '本机本周', value: state.sample.weekTokens, unit: 'TOKENS' },
+      state.modules.cache && { key: 'cache', label: '缓存命中率', value: `${state.sample.cachePercent}%`, unit: '' },
+      state.modules.tps && { key: 'tps', label: `${state.tpsWindow}M TPS`, value: state.sample.tps[state.tpsWindow], unit: 'TOK/S' }
+    ].filter(Boolean);
+
+    const metricHTML = (metric, className) => `<section class="${className}"><span class="metric-label">${metric.label}</span><strong class="metric-value">${metric.value}<small class="metric-unit">${metric.unit}</small></strong></section>`;
+
+    function quotaA(window) {
+      return `<section class="a-quota">
+        <div class="a-quota-row"><span><strong class="a-quota-label">${window.label}</strong> · <span class="a-reset">${resetText(window)}</span></span><strong class="a-quota-value ${redClass(window.usedPercent)}">${window.usedPercent}%</strong></div>
+        <div class="quota-track"><div class="quota-fill ${fillClass(window.usedPercent)}" style="width:${window.usedPercent}%"></div></div>
+      </section>`;
+    }
+
+    function renderA() {
+      const quotaBlock = `<div class="a-quotas">${visibleWindows().map(quotaA).join('') || '<div class="missing">额度窗口未显示</div>'}</div>`;
+      const metricBlock = `<div class="a-metrics">${metrics().map(metric => metricHTML(metric, 'a-metric')).join('') || '<div class="missing">本机指标未显示</div>'}</div>`;
+      const body = state.order === 'tokens-first' ? metricBlock + quotaBlock : quotaBlock + metricBlock;
+      return `<div class="variant-a">
+        <header class="a-head"><span class="a-title">${state.modules.title ? escapeHTML(state.title) : 'USAGE'}</span><span class="a-plan">${state.modules.plan ? state.sample.plan : ''}</span></header>
+        <div class="a-body">${body}</div>
+        <footer class="a-footer"><span>${state.modules.updated ? `更新 ${state.sample.updated}` : ''}</span><span>${state.modules.status ? `● ${state.sample.status}` : ''}</span></footer>
+      </div>`;
+    }
+
+    const quotaAsMetric = window => ({ label: window.label, value: `${window.usedPercent}%`, unit: '' });
+
+    function renderB() {
+      const windows = visibleWindows();
+      const localMetrics = metrics();
+      const quotaFirst = state.order === 'quota-first' && windows.length;
+      const heroQuota = quotaFirst ? windows[windows.length - 1] : null;
+      const heroMetric = heroQuota ? null : (localMetrics[0] || { label: '本机今日', value: 'N/A', unit: '' });
+      const hero = heroQuota
+        ? `<div class="b-hero-row"><div><span class="b-hero-label">${heroQuota.label}</span><div class="b-hero-value ${redClass(heroQuota.usedPercent)}">${heroQuota.usedPercent}%</div></div><span class="b-hero-reset">${resetText(heroQuota)}</span></div><div class="quota-track"><div class="quota-fill ${fillClass(heroQuota.usedPercent)}" style="width:${heroQuota.usedPercent}%"></div></div>`
+        : `<div class="b-hero-row"><div><span class="b-hero-label">${heroMetric.label}</span><div class="b-hero-value">${heroMetric.value}</div></div><span class="b-hero-reset">${heroMetric.unit}</span></div>`;
+      const stripItems = quotaFirst
+        ? [...windows.slice(0, -1).map(quotaAsMetric), ...localMetrics]
+        : [...localMetrics.slice(1), ...windows.map(quotaAsMetric)];
+      return `<div class="variant-b">
+        <header class="b-head"><span class="b-title">${state.modules.title ? escapeHTML(state.title) : 'USAGE'}</span><span class="mono">${state.modules.plan ? state.sample.plan : ''}</span></header>
+        <section class="b-hero">${hero}</section>
+        <div class="b-strip">${stripItems.map(metric => metricHTML(metric, 'b-metric')).join('') || '<div class="missing">未选择其他模块</div>'}</div>
+        <footer class="b-footer"><span>${state.modules.updated ? `更新 ${state.sample.updated}` : ''}</span><span>${state.modules.status ? `● ${state.sample.status}` : ''}</span></footer>
+      </div>`;
+    }
+
+    function renderC() {
+      const localMetrics = metrics();
+      const windows = visibleWindows();
+      const primaryMetric = localMetrics[0] || { label: '本机今日', value: 'N/A', unit: '' };
+      const secondary = localMetrics.slice(1, 4);
+      const quotaBlocks = windows.map(quota => `<div class="c-quota"><div class="c-quota-row"><strong>${quota.label} ${quota.usedPercent}%</strong><span>${resetText(quota)}</span></div><div class="quota-track"><div class="quota-fill ${fillClass(quota.usedPercent)}" style="width:${quota.usedPercent}%"></div></div></div>`).join('');
+      return `<div class="variant-c">
+        <header class="c-head"><span class="c-title">${state.modules.title ? escapeHTML(state.title) : 'USAGEINK'}</span><span class="mono">${state.modules.plan ? state.sample.plan : ''}</span></header>
+        <div class="c-grid">
+          <section class="c-primary"><span class="metric-label">${primaryMetric.label}</span><strong class="metric-value">${primaryMetric.value}<small class="metric-unit">${primaryMetric.unit}</small></strong>
+            ${quotaBlocks}
+          </section>
+          <aside class="c-secondary">${secondary.map(metric => metricHTML(metric, 'c-cell')).join('') || '<div class="missing">开启更多指标</div>'}</aside>
+        </div>
+        <footer class="c-footer"><span>${state.modules.updated ? `更新 ${state.sample.updated}` : ''}</span><span>${state.modules.status ? `● ${state.sample.status}` : ''}</span></footer>
+      </div>`;
+    }
+
+    function render() {
+      $('#screen').innerHTML = state.variant === 'A' ? renderA() : state.variant === 'B' ? renderB() : renderC();
+      const meta = variants.find(v => v.key === state.variant);
+      $('#variant-name').textContent = `${meta.key} — ${meta.name}`;
+      $('#threshold-value').textContent = `${state.redThreshold}%`;
+      $('#state').textContent = JSON.stringify({
+        variant: state.variant,
+        title: state.title,
+        modules: state.modules,
+        order: state.order,
+        quotaMode: state.quotaMode,
+        tpsWindow: state.tpsWindow,
+        dateFormat: state.dateFormat,
+        accent: state.accent,
+        redThreshold: state.redThreshold
+      }, null, 2);
+    }
+
+    function selectVariant(offset) {
+      const index = variants.findIndex(v => v.key === state.variant);
+      state.variant = variants[(index + offset + variants.length) % variants.length].key;
+      const url = new URL(location.href);
+      url.searchParams.set('variant', state.variant);
+      history.replaceState({}, '', url);
+      render();
+    }
+
+    $('#previous').addEventListener('click', () => selectVariant(-1));
+    $('#next').addEventListener('click', () => selectVariant(1));
+    $('#title').addEventListener('input', event => { state.title = event.target.value || 'USAGE'; render(); });
+    $('#order').addEventListener('change', event => { state.order = event.target.value; render(); });
+    $('#quota-mode').addEventListener('change', event => { state.quotaMode = event.target.value; render(); });
+    $('#tps-window').addEventListener('change', event => { state.tpsWindow = Number(event.target.value); render(); });
+    $('#date-format').addEventListener('change', event => { state.dateFormat = event.target.value; render(); });
+    $('#accent').addEventListener('change', event => { state.accent = event.target.value; render(); });
+    $('#threshold').addEventListener('input', event => { state.redThreshold = Number(event.target.value); render(); });
+    document.querySelectorAll('[data-module]').forEach(input => input.addEventListener('change', event => { state.modules[event.target.dataset.module] = event.target.checked; render(); }));
+    document.addEventListener('keydown', event => {
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName) || document.activeElement.isContentEditable) return;
+      if (event.key === 'ArrowLeft') selectVariant(-1);
+      if (event.key === 'ArrowRight') selectVariant(1);
+    });
+
+    render();
+  </script>
+</body>
+</html>
