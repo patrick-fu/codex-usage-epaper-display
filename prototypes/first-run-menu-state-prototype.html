@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>抛弃式原型 · UsageInk first-run / 菜单栏状态机</title>
+  <style>
+    :root {
+      --ink: #1c1917;
+      --muted: #57534e;
+      --line: #d6d3d1;
+      --paper: #f7f4ee;
+      --card: #fffcf7;
+      --accent: #0b6e4f;
+      --accent-soft: #d8efe6;
+      --danger: #b42318;
+      --danger-soft: #fde8e6;
+      --ok: #0b6e4f;
+      --ok-soft: #d8efe6;
+      --warn: #9a3412;
+      --warn-soft: #ffedd5;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font: 15px/1.5 "SF Pro Text", "PingFang SC", "Noto Sans SC", sans-serif;
+    }
+    header {
+      padding: 28px 28px 8px;
+      max-width: 1280px;
+      margin: 0 auto;
+    }
+    .banner {
+      display: inline-block;
+      margin-bottom: 12px;
+      padding: 4px 8px;
+      border: 1px solid var(--warn);
+      color: var(--warn);
+      font-size: 12px;
+      letter-spacing: 0.04em;
+    }
+    h1 { font-size: 28px; line-height: 1.2; margin: 0 0 10px; font-weight: 650; }
+    .question, .hypotheses, p { color: var(--ink); }
+    .question { max-width: 74ch; margin: 0 0 16px; }
+    .hypotheses {
+      max-width: 74ch;
+      padding: 12px 14px;
+      background: var(--card);
+      border: 1px solid var(--line);
+    }
+    .hypotheses strong { display: block; margin-bottom: 6px; }
+    .hypotheses ol { margin: 0; padding-left: 1.3em; }
+    .layout {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 18px 28px 48px;
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 16px;
+    }
+    section {
+      background: var(--card);
+      border: 1px solid var(--line);
+      padding: 14px 16px;
+    }
+    h2 { font-size: 13px; text-transform: none; letter-spacing: 0.02em; margin: 0 0 10px; color: var(--muted); font-weight: 650; }
+    .result {
+      padding: 8px 10px;
+      margin-bottom: 12px;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+    .result.ok { border-color: var(--accent); background: var(--ok-soft); }
+    .result.bad { border-color: var(--danger); background: var(--danger-soft); }
+    .changed { color: var(--warn); font-size: 13px; margin-top: 4px; }
+    .fields { display: grid; grid-template-columns: 140px 1fr; gap: 4px 10px; font-size: 13px; }
+    .fields b { color: var(--muted); font-weight: 550; }
+    .fields span { word-break: break-word; }
+    .fields span.hot { background: #fff3cd; }
+    pre {
+      margin: 10px 0 0;
+      padding: 10px;
+      background: #1c1917;
+      color: #f5f5f4;
+      font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+      overflow: auto;
+      max-height: 280px;
+    }
+    .menu, .frame {
+      border: 1px solid var(--line);
+      padding: 10px;
+      background: #fff;
+      margin-bottom: 10px;
+    }
+    .menu-item { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; padding: 3px 0; }
+    .menu-item.off { color: #a8a29e; }
+    .why { color: var(--muted); font-size: 12px; }
+    .actions { grid-column: 1 / -1; }
+    .group { margin-bottom: 10px; }
+    .group h3 { margin: 0 0 6px; font-size: 13px; color: var(--muted); font-weight: 650; }
+    .row { display: flex; flex-wrap: wrap; gap: 6px; }
+    button {
+      appearance: none;
+      border: 1px solid var(--ink);
+      background: #fff;
+      color: var(--ink);
+      padding: 6px 9px;
+      font: inherit;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    button:hover { background: var(--accent-soft); border-color: var(--accent); }
+    .walkthrough { grid-column: 1 / -1; }
+    .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+    .tabs button[aria-selected="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .scene p { margin: 0 0 10px; max-width: 80ch; }
+    .steps { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+    .steps button[disabled] { opacity: 0.45; cursor: default; }
+    .steps .done { text-decoration: line-through; }
+    .step-note { font-size: 12px; color: var(--muted); margin-top: 8px; }
+    @media (max-width: 960px) {
+      .layout { grid-template-columns: 1fr; padding: 12px; }
+      header { padding: 18px 12px 0; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="banner">抛弃式逻辑原型 · 非产品实现 · 不进入 main · 双击本文件即可试用</div>
+    <h1>UsageInk first-run 与菜单栏状态机</h1>
+    <p class="question">问题：在不做成窗口应用的前提下，first-run、Codex 就绪、本机指标、BLE 绑定、<code>wakeup_pin</code> 明示同意、Initial/手动/自动 Refresh、以及 Mac 睡眠/断线恢复，怎样用一组正交字段和少量菜单动作覆盖，且非法动作能被说清？</p>
+    <div class="hypotheses">
+      <strong>待验证的产品假设（点场景或自由操作来打）</strong>
+      <ol>
+        <li>默认不自动写 pin：读到 <code>wakeup_pin=0xFF</code> 或已有非 0xFF 时，只记录，不进入待确认，更不会发写入。</li>
+        <li>Codex 未就绪允许降级帧：未登录/未安装时仍可绑定并 Refresh；帧上写原因，绝不画 0%。</li>
+        <li>手动 Refresh 即使内容未变也强制整帧；自动 Refresh 内容未变则跳过。</li>
+        <li>多候选按广播名 + RSSI + 短 ID 选择，同时只绑一台，换设备必须先解绑。</li>
+      </ol>
+    </div>
+  </header>
+
+  <div class="layout">
+    <section>
+      <h2>当前状态</h2>
+      <div id="result" class="result">尚未操作</div>
+      <div id="fields" class="fields"></div>
+    </section>
+    <section>
+      <h2>此刻能点的菜单 / 将下发的帧</h2>
+      <div class="menu" id="menu"></div>
+      <div class="frame" id="frame"></div>
+      <h2>完整字段 JSON</h2>
+      <pre id="json"></pre>
+    </section>
+
+    <section class="actions">
+      <h2>自由操作（任何顺序，非法会留下原因）</h2>
+      <div class="group"><h3>Codex</h3><div class="row" id="act-codex"></div></div>
+      <div class="group"><h3>本机 Local Activity Metric</h3><div class="row" id="act-local"></div></div>
+      <div class="group"><h3>蓝牙与绑定</h3><div class="row" id="act-ble"></div></div>
+      <div class="group"><h3>连接会话与 pin</h3><div class="row" id="act-link"></div></div>
+      <div class="group"><h3>Refresh 与传输</h3><div class="row" id="act-refresh"></div></div>
+      <div class="group"><h3>睡眠 / 断线 / 恢复 / Style</h3><div class="row" id="act-life"></div></div>
+    </section>
+
+    <section class="walkthrough">
+      <h2>引导场景</h2>
+      <div class="tabs" id="tabs"></div>
+      <div class="scene" id="scene"></div>
+    </section>
+  </div>
+
+  <script>
+    /* ===== liftable module: UsageInk first-run / menu state machine ===== */
+    var UsageInkMachine = (function () {
+      var CANDIDATES = [
+        { id: "C3A1", name: "UsageInk-Desk", rssi: -38, compatible: true },
+        { id: "91F0", name: "UsageInk-Shelf", rssi: -67, compatible: true },
+        { id: "0E15", name: "OldTag", rssi: -55, compatible: false }
+      ];
+
+      function initialState() {
+        return {
+          setupDone: false,
+          codex: "unknown",
+          localMetrics: "unknown",
+          bluetooth: "unknown",
+          binding: "unbound",
+          candidates: [],
+          boundDisplay: null,
+          link: "none",
+          wakeupPin: "unknown",
+          wakeupPinValue: null,
+          wakeupConsent: "idle",
+          pendingPinValue: null,
+          lastWrittenPin: null,
+          lastRefresh: "never",
+          lastRefreshReason: "",
+          lastSuccessfulFrame: null,
+          pendingFrame: null,
+          lastSentFingerprint: null,
+          transferInterrupted: false,
+          host: "awake",
+          style: "Quota Focus"
+        };
+      }
+
+      function composeFrame(state) {
+        var quota =
+          state.codex === "ready" ? "账号配额 13% · 7 天窗口" :
+          state.codex === "stale" ? "账号配额（过期快照）13%" :
+          state.codex === "unavailable" ? "限额暂不可用" :
+          state.codex === "auth_required" ? "请在 Codex 登录" :
+          state.codex === "binary_missing" ? "未找到 Codex" :
+          state.codex === "version_too_old" ? "需要升级 Codex ≥ 0.147.0" :
+          state.codex === "incompatible" ? "Codex 协议不兼容" :
+          "Codex 未探测";
+        var local =
+          state.localMetrics === "ready" ? "本机今日 1.2M · 本周 8.4M · Cache hit rate 41% · TPS 12" :
+          state.localMetrics === "partial" ? "本机活动部分覆盖" :
+          state.localMetrics === "zero" ? "本机已扫描，今日/本周 0 token（不是缺失）" :
+          state.localMetrics === "no_sessions" ? "本机无 session" :
+          state.localMetrics === "home_missing" ? "本机 Codex 目录缺失" :
+          state.localMetrics === "unreadable" ? "本机日志不可读" :
+          state.localMetrics === "stale" ? "本机活动（过期）" :
+          "本机活动未扫描";
+        var fingerprint = [state.style, quota, local].join(" | ");
+        return { style: state.style, quota: quota, local: local, fingerprint: fingerprint };
+      }
+
+      function deriveUxPhase(state) {
+        if (state.wakeupConsent === "pending") return "setup_wakeup";
+        if (state.link === "transferring" || state.link === "refresh_sent") return "refreshing";
+        if (state.host === "asleep" || state.host === "waking" || state.binding === "bound_disconnected" || state.binding === "connecting") {
+          return "recovering";
+        }
+        if (!state.setupDone) {
+          if (state.binding === "unbound" || state.binding === "scanning" || state.binding === "candidates" || state.link !== "initialized") {
+            return "setup_bind";
+          }
+          return "setup_initial_refresh";
+        }
+        var blocked = ["binary_missing", "version_too_old", "incompatible", "auth_required"];
+        if (blocked.indexOf(state.codex) !== -1 || state.bluetooth !== "on") return "needs_attention";
+        return "idle";
+      }
+
+      function menuItems(state) {
+        function item(label, enabled, why) {
+          return { label: label, enabled: enabled, why: enabled ? "" : why };
+        }
+        var bound = !!state.boundDisplay;
+        var transferring = state.link === "transferring" || state.link === "refresh_sent";
+        var canRefresh = state.binding === "bound_connected" && state.link === "initialized" && state.host === "awake" && !transferring && state.wakeupConsent !== "pending";
+        return [
+          item("重新探测 Codex", true, ""),
+          item("查找显示器", state.bluetooth === "on" && !transferring, state.bluetooth !== "on" ? "需要蓝牙授权且电源打开" : "传输中不能扫描"),
+          item("绑定", state.binding === "unbound" && state.candidates.length > 0 && !transferring, bound ? "已绑定，先解绑" : "先扫描到候选"),
+          item("解绑", bound && !transferring, transferring ? "传输中不能解绑" : "尚未绑定"),
+          item("立即 Refresh", canRefresh, refreshBlockReason(state)),
+          item("确认写入 wakeup_pin", state.wakeupConsent === "pending", "没有待确认的 pin 写入"),
+          item("切换 Display Style", !transferring, "传输中不能改 Style")
+        ];
+      }
+
+      function refreshBlockReason(state) {
+        if (state.host === "asleep") return "Mac 睡眠中";
+        if (state.host === "waking" || state.binding === "bound_disconnected" || state.binding === "connecting") return "显示未恢复到已 INIT";
+        if (!state.boundDisplay) return "尚未绑定";
+        if (state.link !== "initialized") return "需要先收到 config 并 INIT";
+        if (state.link === "transferring" || state.link === "refresh_sent") return "已有传输在进行";
+        if (state.wakeupConsent === "pending") return "先确认或拒绝 pin 写入";
+        return "";
+      }
+
+      function fail(state, reason) {
+        return { ok: false, reason: reason, state: state };
+      }
+
+      function ok(state, reason) {
+        return { ok: true, reason: reason, state: state };
+      }
+
+      function interrupt(state, why) {
+        var next = Object.assign({}, state, { link: "none", pendingFrame: null });
+        if (state.link === "transferring" || state.link === "refresh_sent") {
+          next.lastRefresh = "failed";
+          next.transferInterrupted = true;
+          next.lastRefreshReason = why + "；中断传输，上次成功帧保留在面板上";
+        }
+        return next;
+      }
+
+      function startRefresh(state, kind) {
+        var frame = composeFrame(state);
+        var same = !!state.lastSentFingerprint && frame.fingerprint === state.lastSentFingerprint;
+        if (kind === "auto" && same) {
+          return ok(Object.assign({}, state, {
+            lastRefresh: "skipped_unchanged",
+            lastRefreshReason: "可见内容未变，自动 Refresh 跳过",
+            pendingFrame: null
+          }), "自动 Refresh 跳过：内容指纹未变");
+        }
+        var reason = (kind === "manual" && same)
+          ? "手动 Refresh：内容未变，仍强制整帧"
+          : (kind === "initial" ? "开始 Initial Refresh 整帧传输" : "开始整帧传输");
+        return ok(Object.assign({}, state, {
+          link: "transferring",
+          pendingFrame: frame,
+          transferInterrupted: false,
+          lastRefreshReason: reason
+        }), reason);
+      }
+
+      function findCandidate(id) {
+        for (var i = 0; i < CANDIDATES.length; i++) if (CANDIDATES[i].id === id) return CANDIDATES[i];
+        return null;
+      }
+
+      function reduce(state, action) {
+        var type = action.type;
+        var asleep = state.host === "asleep";
+        var transferring = state.link === "transferring" || state.link === "refresh_sent";
+
+        if (type === "PROBE_CODEX") {
+          return ok(Object.assign({}, state, { codex: action.result }), "Codex 状态变为 " + action.result);
+        }
+        if (type === "SCAN_LOCAL") {
+          return ok(Object.assign({}, state, { localMetrics: action.result }), "本机指标状态变为 " + action.result);
+        }
+        if (type === "BLUETOOTH_AUTHORIZE") {
+          return ok(Object.assign({}, state, { bluetooth: "on" }), "蓝牙已授权");
+        }
+        if (type === "BLUETOOTH_DENY") {
+          var denied = interrupt(state, "蓝牙授权被撤销");
+          denied.bluetooth = "unauthorized";
+          denied.candidates = [];
+          denied.binding = state.boundDisplay ? "bound_disconnected" : "unbound";
+          return ok(denied, "用户拒绝蓝牙；当前会话作废，不能再扫描或恢复连接");
+        }
+        if (type === "SCAN_DISPLAYS") {
+          if (asleep) return fail(state, "Mac 睡眠中不能扫描");
+          if (state.bluetooth !== "on") return fail(state, "先授权蓝牙");
+          if (transferring) return fail(state, "传输中不能扫描");
+          return ok(Object.assign({}, state, {
+            candidates: CANDIDATES.slice(),
+            binding: state.boundDisplay ? state.binding : "candidates"
+          }), "发现 3 台候选：广播名 + RSSI + 短 ID");
+        }
+        if (type === "BIND") {
+          if (asleep) return fail(state, "Mac 睡眠中不能绑定");
+          if (transferring) return fail(state, "传输中不能绑定");
+          if (state.boundDisplay) return fail(state, "已有 Bound Display，先解绑");
+          if (!state.candidates.length) return fail(state, "先扫描候选");
+          var found = findCandidate(action.id);
+          if (!found) return fail(state, "未知候选");
+          if (!found.compatible) return fail(state, found.name + " 不兼容（version < 0x16），未绑定");
+          return ok(Object.assign({}, state, {
+            binding: "bound_connected",
+            boundDisplay: { id: found.id, name: found.name, rssi: found.rssi },
+            link: "subscribed",
+            wakeupPin: "unknown",
+            wakeupPinValue: null,
+            wakeupConsent: "idle",
+            pendingPinValue: null
+          }), "已绑定 " + found.name + " · RSSI " + found.rssi + " · " + found.id + "，等待 config");
+        }
+        if (type === "UNBIND") {
+          if (!state.boundDisplay) return fail(state, "尚未绑定");
+          if (transferring) return fail(state, "传输中不能解绑");
+          return ok(Object.assign({}, state, {
+            binding: state.candidates.length ? "candidates" : "unbound",
+            boundDisplay: null,
+            link: "none",
+            wakeupPin: "unknown",
+            wakeupPinValue: null,
+            wakeupConsent: "idle",
+            pendingPinValue: null,
+            transferInterrupted: false
+          }), "已解绑；设备 FDS 中的 pin 不被改写");
+        }
+        if (type === "RECEIVE_CONFIG") {
+          if (asleep) return fail(state, "Mac 睡眠中收不到本次连接的 config");
+          if (!state.boundDisplay) return fail(state, "尚未绑定");
+          if (state.link !== "subscribed") return fail(state, "当前会话还不能收 config：需要绑定或重连后处于已订阅");
+          var pin = action.pin;
+          return ok(Object.assign({}, state, {
+            binding: "bound_connected",
+            link: "config_seen",
+            wakeupPin: pin === "0xFF" ? "is_0xFF" : "is_set",
+            wakeupPinValue: pin,
+            wakeupConsent: "idle",
+            pendingPinValue: null
+          }), "读到 wakeup_pin=" + pin + "。默认不自动写 pin，未进入待确认");
+        }
+        if (type === "INIT_OK") {
+          if (asleep) return fail(state, "Mac 睡眠中不能 INIT");
+          if (state.link !== "config_seen") return fail(state, "必须先收到本次连接的 config，再 INIT");
+          return ok(Object.assign({}, state, { link: "initialized" }), "INIT 完成，已收到新 mtu=，可以整帧 Refresh");
+        }
+        if (type === "REQUEST_WRITE_PIN") {
+          if (asleep) return fail(state, "Mac 睡眠中不能改 pin");
+          if (transferring) return fail(state, "传输中不能改 pin");
+          if (state.link !== "config_seen" && state.link !== "initialized") return fail(state, "先收到 config，才能请求写 pin");
+          if (state.wakeupConsent === "pending") return fail(state, "已有待确认写入，先确认或拒绝");
+          return ok(Object.assign({}, state, {
+            wakeupConsent: "pending",
+            pendingPinValue: action.value
+          }), "请求写入 wakeup_pin=" + action.value + "，等待明示同意");
+        }
+        if (type === "CONFIRM_WRITE_PIN") {
+          if (state.wakeupConsent !== "pending") return fail(state, "没有待确认的 pin 写入");
+          if (asleep) return fail(state, "Mac 睡眠中不能写入");
+          if (transferring) return fail(state, "传输中不能写入");
+          var written = state.pendingPinValue;
+          return ok(Object.assign({}, state, {
+            wakeupConsent: "confirmed",
+            lastWrittenPin: written,
+            wakeupPinValue: written,
+            wakeupPin: written === "0xFF" ? "is_0xFF" : "is_set",
+            pendingPinValue: null
+          }), "已明示同意并写入 wakeup_pin=" + written + "（无 ACK，持久进入设备）");
+        }
+        if (type === "DECLINE_WRITE_PIN") {
+          if (state.wakeupConsent !== "pending") return fail(state, "没有待确认的 pin 写入");
+          return ok(Object.assign({}, state, {
+            wakeupConsent: "declined",
+            pendingPinValue: null
+          }), "已拒绝写入；设备仍保持 " + (state.wakeupPinValue || "未知"));
+        }
+        if (type === "INITIAL_REFRESH") {
+          if (state.setupDone || state.lastRefresh !== "never") return fail(state, "初始 Refresh 已做过，请用手动或自动 Refresh");
+          if (refreshBlockReason(state)) return fail(state, refreshBlockReason(state));
+          return startRefresh(state, "initial");
+        }
+        if (type === "MANUAL_REFRESH") {
+          if (refreshBlockReason(state)) return fail(state, refreshBlockReason(state));
+          return startRefresh(state, "manual");
+        }
+        if (type === "AUTO_REFRESH") {
+          if (!state.setupDone) return fail(state, "自动 Refresh 只在 first-run 完成后运行");
+          if (refreshBlockReason(state)) return fail(state, refreshBlockReason(state));
+          return startRefresh(state, "auto");
+        }
+        if (type === "TRANSFER_SUCCESS") {
+          if (state.link !== "transferring") return fail(state, "当前没有进行中的传输");
+          var done = state.pendingFrame;
+          return ok(Object.assign({}, state, {
+            link: "initialized",
+            lastRefresh: "succeeded",
+            lastSuccessfulFrame: done,
+            lastSentFingerprint: done ? done.fingerprint : state.lastSentFingerprint,
+            pendingFrame: null,
+            setupDone: true,
+            lastRefreshReason: "Refresh 成功：整帧已提交",
+            transferInterrupted: false
+          }), "传输成功。这是唯一把面板视为已更新的动作");
+        }
+        if (type === "TRANSFER_FAIL") {
+          if (state.link !== "transferring") return fail(state, "当前没有进行中的传输");
+          return ok(Object.assign({}, state, {
+            link: "initialized",
+            lastRefresh: "failed",
+            pendingFrame: null,
+            setupDone: true,
+            lastRefreshReason: "传输失败；面板保留上次成功帧"
+          }), "传输失败。面板不变，setup 仍算完成过一次尝试");
+        }
+        if (type === "MAC_SLEEP") {
+          if (state.host === "asleep") return fail(state, "已经在睡眠");
+          var slept = interrupt(state, "Mac 睡眠拆掉 BLE 会话");
+          slept.host = "asleep";
+          if (slept.boundDisplay) slept.binding = "bound_disconnected";
+          return ok(slept, "Mac 已睡眠。会话作废，不能续传");
+        }
+        if (type === "MAC_WAKE") {
+          if (state.host !== "asleep") return fail(state, "Mac 并未睡眠");
+          return ok(Object.assign({}, state, { host: "waking" }), "Mac 已醒，仍需重连 → config → INIT");
+        }
+        if (type === "DISPLAY_DISCONNECT") {
+          if (!state.boundDisplay) return fail(state, "没有 Bound Display");
+          if (state.binding === "bound_disconnected" && state.link === "none") return fail(state, "已经处于断开");
+          var cut = interrupt(state, "显示断开");
+          cut.binding = "bound_disconnected";
+          return ok(cut, "显示已断开。不能从未知 offset 续传");
+        }
+        if (type === "RECONNECT") {
+          if (asleep) return fail(state, "Mac 仍在睡眠，先唤醒");
+          if (state.bluetooth !== "on") return fail(state, "先重新授权蓝牙");
+          if (!state.boundDisplay) return fail(state, "没有已绑定设备可恢复");
+          if (transferring) return fail(state, "先让当前传输结束或随断线作废");
+          if (state.binding === "bound_connected" && state.link !== "none") return fail(state, "当前会话仍在，不必重连");
+          return ok(Object.assign({}, state, {
+            host: "awake",
+            binding: "bound_connected",
+            link: "subscribed",
+            wakeupConsent: state.wakeupConsent === "pending" ? "idle" : state.wakeupConsent,
+            pendingPinValue: null
+          }), "已重连并重新订阅。必须重新收 config 并 INIT，不能续传");
+        }
+        if (type === "CHANGE_STYLE") {
+          if (transferring) return fail(state, "传输中不能改 Style");
+          return ok(Object.assign({}, state, { style: action.style }), "Display Style 改为 " + action.style + "。只改本地，需 Refresh 才下发");
+        }
+        return fail(state, "未知动作");
+      }
+
+      function fixtureIdleReady() {
+        var state = initialState();
+        var ready = Object.assign({}, state, {
+          setupDone: true,
+          codex: "ready",
+          localMetrics: "ready",
+          bluetooth: "on",
+          binding: "bound_connected",
+          candidates: CANDIDATES.slice(),
+          boundDisplay: { id: "C3A1", name: "UsageInk-Desk", rssi: -38 },
+          link: "initialized",
+          wakeupPin: "is_0xFF",
+          wakeupPinValue: "0xFF",
+          lastRefresh: "succeeded",
+          lastRefreshReason: "上次日常 Refresh 成功",
+          style: "Quota Focus"
+        });
+        var frame = composeFrame(ready);
+        ready.lastSuccessfulFrame = frame;
+        ready.lastSentFingerprint = frame.fingerprint;
+        return ready;
+      }
+
+      return {
+        initialState: initialState,
+        reduce: reduce,
+        composeFrame: composeFrame,
+        deriveUxPhase: deriveUxPhase,
+        menuItems: menuItems,
+        candidates: CANDIDATES,
+        fixtureIdleReady: fixtureIdleReady
+      };
+    })();
+  </script>
+
+  <script>
+    (function () {
+      var machine = UsageInkMachine;
+      var state = machine.initialState();
+      var last = { ok: null, reason: "尚未操作", changed: [] };
+      var prev = null;
+      var sceneIndex = 0;
+      var stepIndex = 0;
+
+      var scenes = [
+        {
+          id: "happy",
+          title: "1. Happy path",
+          reset: "fresh",
+          blurb: "Codex 与本机指标都就绪，扫到多台后按名+RSSI+短 ID 绑 Desk，读到 0xFF 但不自动写 pin，Initial Refresh 成功进入 idle。",
+          steps: [
+            { label: "探测 Codex：就绪", action: { type: "PROBE_CODEX", result: "ready" } },
+            { label: "扫描本机指标：就绪", action: { type: "SCAN_LOCAL", result: "ready" } },
+            { label: "授权蓝牙", action: { type: "BLUETOOTH_AUTHORIZE" } },
+            { label: "扫描候选", action: { type: "SCAN_DISPLAYS" } },
+            { label: "绑定 UsageInk-Desk / -38 / C3A1", action: { type: "BIND", id: "C3A1" } },
+            { label: "收到 config（0xFF）", action: { type: "RECEIVE_CONFIG", pin: "0xFF" } },
+            { label: "INIT 成功", action: { type: "INIT_OK" } },
+            { label: "初始 Refresh", action: { type: "INITIAL_REFRESH" } },
+            { label: "传输成功", action: { type: "TRANSFER_SUCCESS" } }
+          ]
+        },
+        {
+          id: "degraded",
+          title: "2. Codex 未就绪先绑定",
+          reset: "fresh",
+          blurb: "需要登录时仍绑定并 Initial Refresh。观察菜单允许 Refresh，帧上是「请在 Codex 登录」而不是 0%。",
+          steps: [
+            { label: "探测 Codex：需要登录", action: { type: "PROBE_CODEX", result: "auth_required" } },
+            { label: "授权蓝牙", action: { type: "BLUETOOTH_AUTHORIZE" } },
+            { label: "扫描候选", action: { type: "SCAN_DISPLAYS" } },
+            { label: "绑定 Desk", action: { type: "BIND", id: "C3A1" } },
+            { label: "收到 config（0xFF）", action: { type: "RECEIVE_CONFIG", pin: "0xFF" } },
+            { label: "INIT 成功", action: { type: "INIT_OK" } },
+            { label: "初始 Refresh（应合法，降级帧）", action: { type: "INITIAL_REFRESH" } },
+            { label: "传输成功", action: { type: "TRANSFER_SUCCESS" } }
+          ]
+        },
+        {
+          id: "pin",
+          title: "3. wakeup_pin 明示同意 / 拒绝",
+          reset: "fresh",
+          blurb: "先读到 0xFF：不自动写，只有确认后才写入。解绑换 Shelf 后读到已有 0x0C，请求改 0xFF 再拒绝，设备保持 0x0C。",
+          steps: [
+            { label: "授权蓝牙", action: { type: "BLUETOOTH_AUTHORIZE" } },
+            { label: "扫描候选", action: { type: "SCAN_DISPLAYS" } },
+            { label: "绑定 Desk", action: { type: "BIND", id: "C3A1" } },
+            { label: "收到 0xFF（不应自动 pending）", action: { type: "RECEIVE_CONFIG", pin: "0xFF" } },
+            { label: "INIT 成功", action: { type: "INIT_OK" } },
+            { label: "请求写入 0xFF", action: { type: "REQUEST_WRITE_PIN", value: "0xFF" } },
+            { label: "确认写入 0xFF", action: { type: "CONFIRM_WRITE_PIN" } },
+            { label: "解绑", action: { type: "UNBIND" } },
+            { label: "扫描候选", action: { type: "SCAN_DISPLAYS" } },
+            { label: "绑定 Shelf / -67 / 91F0", action: { type: "BIND", id: "91F0" } },
+            { label: "收到已有非 0xFF（0x0C）", action: { type: "RECEIVE_CONFIG", pin: "0x0C" } },
+            { label: "INIT 成功", action: { type: "INIT_OK" } },
+            { label: "请求覆盖为 0xFF", action: { type: "REQUEST_WRITE_PIN", value: "0xFF" } },
+            { label: "拒绝写入", action: { type: "DECLINE_WRITE_PIN" } }
+          ]
+        },
+        {
+          id: "partial",
+          title: "4. 部分账号 / 本机数据",
+          reset: "fresh",
+          blurb: "限额暂不可用 + 本机部分覆盖。Refresh 后帧必须分开写清，禁止把空值画成 0%。",
+          steps: [
+            { label: "探测 Codex：限额暂不可用", action: { type: "PROBE_CODEX", result: "unavailable" } },
+            { label: "扫描本机：部分覆盖", action: { type: "SCAN_LOCAL", result: "partial" } },
+            { label: "授权蓝牙", action: { type: "BLUETOOTH_AUTHORIZE" } },
+            { label: "扫描候选", action: { type: "SCAN_DISPLAYS" } },
+            { label: "绑定 Desk", action: { type: "BIND", id: "C3A1" } },
+            { label: "收到 config（0xFF）", action: { type: "RECEIVE_CONFIG", pin: "0xFF" } },
+            { label: "INIT 成功", action: { type: "INIT_OK" } },
+            { label: "初始 Refresh", action: { type: "INITIAL_REFRESH" } },
+            { label: "传输成功", action: { type: "TRANSFER_SUCCESS" } }
+          ]
+        },
+        {
+          id: "recover",
+          title: "5. 睡眠 / 断线 / 中断后完整恢复",
+          reset: "idle",
+          blurb: "从已就绪日常态开始。手动 Refresh 中途睡眠，传输失败且不能续传；唤醒后 Refresh 应非法，必须重连 → config → INIT → 整帧重发。再试一次内容未变的自动跳过，与强制手动。",
+          steps: [
+            { label: "手动 Refresh（开始传输）", action: { type: "MANUAL_REFRESH" } },
+            { label: "Mac 睡眠（中断传输）", action: { type: "MAC_SLEEP" } },
+            { label: "尝试手动 Refresh（应非法）", action: { type: "MANUAL_REFRESH" } },
+            { label: "Mac 唤醒", action: { type: "MAC_WAKE" } },
+            { label: "再试手动 Refresh（仍应非法）", action: { type: "MANUAL_REFRESH" } },
+            { label: "重连", action: { type: "RECONNECT" } },
+            { label: "收到 config（0xFF）", action: { type: "RECEIVE_CONFIG", pin: "0xFF" } },
+            { label: "INIT 成功", action: { type: "INIT_OK" } },
+            { label: "手动 Refresh（整帧重发）", action: { type: "MANUAL_REFRESH" } },
+            { label: "传输成功", action: { type: "TRANSFER_SUCCESS" } },
+            { label: "自动 Refresh（内容未变应跳过）", action: { type: "AUTO_REFRESH" } },
+            { label: "手动 Refresh（未变也强制）", action: { type: "MANUAL_REFRESH" } }
+          ]
+        }
+      ];
+
+      function snapshot(s) {
+        return JSON.parse(JSON.stringify(s));
+      }
+
+      function diffFields(a, b) {
+        if (!a) return [];
+        var keys = Object.keys(b);
+        var changed = [];
+        for (var i = 0; i < keys.length; i++) {
+          var k = keys[i];
+          if (JSON.stringify(a[k]) !== JSON.stringify(b[k])) changed.push(k);
+        }
+        return changed;
+      }
+
+      function dispatch(action) {
+        prev = snapshot(state);
+        var result = machine.reduce(state, action);
+        last = { ok: result.ok, reason: result.reason, changed: result.ok ? diffFields(prev, result.state) : [] };
+        if (result.ok) state = result.state;
+        render();
+      }
+
+      function resetScene(index) {
+        sceneIndex = index;
+        stepIndex = 0;
+        state = scenes[index].reset === "idle" ? machine.fixtureIdleReady() : machine.initialState();
+        last = { ok: null, reason: "已重置到该场景的起始状态", changed: [] };
+        prev = null;
+        render();
+      }
+
+      function field(label, value) {
+        return "<b>" + label + "</b><span>" + String(value == null ? "—" : value) + "</span>";
+      }
+
+      function renderFields() {
+        var bound = state.boundDisplay
+          ? state.boundDisplay.name + " / RSSI " + state.boundDisplay.rssi + " / " + state.boundDisplay.id
+          : "未绑定";
+        var pending = state.pendingFrame ? state.pendingFrame.fingerprint : "—";
+        var lastFrame = state.lastSuccessfulFrame ? state.lastSuccessfulFrame.fingerprint : "—";
+        var pairs = [
+          ["ux_phase", machine.deriveUxPhase(state)],
+          ["setup_done", state.setupDone],
+          ["Codex", state.codex],
+          ["本机指标", state.localMetrics],
+          ["蓝牙", state.bluetooth],
+          ["绑定", state.binding],
+          ["Bound Display", bound],
+          ["连接会话", state.link],
+          ["wakeup_pin", (state.wakeupPinValue || state.wakeupPin)],
+          ["pin 同意", state.wakeupConsent + (state.pendingPinValue ? " → " + state.pendingPinValue : "")],
+          ["上次实写 pin", state.lastWrittenPin || "从未写入"],
+          ["上次 Refresh", state.lastRefresh],
+          ["Refresh 说明", state.lastRefreshReason || "—"],
+          ["传输中断过", state.transferInterrupted],
+          ["Mac", state.host],
+          ["Display Style", state.style],
+          ["面板上的成功帧", lastFrame],
+          ["在途帧", pending]
+        ];
+        var html = "";
+        for (var i = 0; i < pairs.length; i++) {
+          var hot = last.changed.indexOf(pairs[i][0]) !== -1;
+          var keyMap = {
+            "ux_phase": "",
+            "setup_done": "setupDone",
+            "Codex": "codex",
+            "本机指标": "localMetrics",
+            "蓝牙": "bluetooth",
+            "绑定": "binding",
+            "Bound Display": "boundDisplay",
+            "连接会话": "link",
+            "wakeup_pin": "wakeupPinValue",
+            "pin 同意": "wakeupConsent",
+            "上次实写 pin": "lastWrittenPin",
+            "上次 Refresh": "lastRefresh",
+            "Refresh 说明": "lastRefreshReason",
+            "传输中断过": "transferInterrupted",
+            "Mac": "host",
+            "Display Style": "style",
+            "面板上的成功帧": "lastSuccessfulFrame",
+            "在途帧": "pendingFrame"
+          };
+          hot = last.changed.indexOf(keyMap[pairs[i][0]]) !== -1;
+          html += "<b>" + pairs[i][0] + "</b><span class='" + (hot ? "hot" : "") + "'>" + pairs[i][1] + "</span>";
+        }
+        document.getElementById("fields").innerHTML = html;
+      }
+
+      function renderResult() {
+        var el = document.getElementById("result");
+        if (last.ok === null) {
+          el.className = "result";
+          el.innerHTML = last.reason;
+          return;
+        }
+        el.className = "result " + (last.ok ? "ok" : "bad");
+        var changed = last.changed.length ? last.changed.join("、") : "无字段变化";
+        el.innerHTML = (last.ok ? "允许" : "非法") + " · " + last.reason +
+          "<div class='changed'>" + (last.ok ? "变化字段：" + changed : "状态未改") + "</div>";
+      }
+
+      function renderMenu() {
+        var items = machine.menuItems(state);
+        var html = "";
+        for (var i = 0; i < items.length; i++) {
+          html += "<div class='menu-item " + (items[i].enabled ? "" : "off") + "'><span>" +
+            items[i].label + "</span><span class='why'>" + (items[i].enabled ? "可点" : items[i].why) + "</span></div>";
+        }
+        document.getElementById("menu").innerHTML = html;
+        var frame = machine.composeFrame(state);
+        var panel = state.lastSuccessfulFrame ? state.lastSuccessfulFrame.fingerprint : "面板仍是空的 / 上次成功帧不存在";
+        document.getElementById("frame").innerHTML =
+          "<div><b>将组成的 Display Frame</b><br>" + frame.fingerprint + "</div>" +
+          "<div class='why' style='margin-top:6px'>面板实际内容（上次成功 Refresh）：" + panel + "</div>";
+        document.getElementById("json").textContent = JSON.stringify({
+          uxPhase: machine.deriveUxPhase(state),
+          frame: frame,
+          state: state
+        }, null, 2);
+      }
+
+      function button(label, action) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.textContent = label;
+        b.addEventListener("click", function () { dispatch(action); });
+        return b;
+      }
+
+      function fillActions() {
+        var codex = document.getElementById("act-codex");
+        var local = document.getElementById("act-local");
+        var ble = document.getElementById("act-ble");
+        var link = document.getElementById("act-link");
+        var refresh = document.getElementById("act-refresh");
+        var life = document.getElementById("act-life");
+        [
+          ["探测：就绪", { type: "PROBE_CODEX", result: "ready" }],
+          ["探测：未安装", { type: "PROBE_CODEX", result: "binary_missing" }],
+          ["探测：版本过旧", { type: "PROBE_CODEX", result: "version_too_old" }],
+          ["探测：需要登录", { type: "PROBE_CODEX", result: "auth_required" }],
+          ["探测：限额暂不可用", { type: "PROBE_CODEX", result: "unavailable" }],
+          ["探测：不兼容", { type: "PROBE_CODEX", result: "incompatible" }]
+        ].forEach(function (pair) { codex.appendChild(button(pair[0], pair[1])); });
+        [
+          ["本机：就绪", { type: "SCAN_LOCAL", result: "ready" }],
+          ["本机：部分覆盖", { type: "SCAN_LOCAL", result: "partial" }],
+          ["本机：无 session", { type: "SCAN_LOCAL", result: "no_sessions" }],
+          ["本机：目录缺失", { type: "SCAN_LOCAL", result: "home_missing" }],
+          ["本机：不可读", { type: "SCAN_LOCAL", result: "unreadable" }],
+          ["本机：今日为零", { type: "SCAN_LOCAL", result: "zero" }]
+        ].forEach(function (pair) { local.appendChild(button(pair[0], pair[1])); });
+        ble.appendChild(button("授权蓝牙", { type: "BLUETOOTH_AUTHORIZE" }));
+        ble.appendChild(button("拒绝蓝牙", { type: "BLUETOOTH_DENY" }));
+        ble.appendChild(button("扫描候选", { type: "SCAN_DISPLAYS" }));
+        machine.candidates.forEach(function (c) {
+          ble.appendChild(button(
+            "绑定 " + c.name + " / " + c.rssi + " / " + c.id + (c.compatible ? "" : "（旧固件）"),
+            { type: "BIND", id: c.id }
+          ));
+        });
+        ble.appendChild(button("解绑", { type: "UNBIND" }));
+        link.appendChild(button("收到 config：0xFF", { type: "RECEIVE_CONFIG", pin: "0xFF" }));
+        link.appendChild(button("收到 config：0x0C", { type: "RECEIVE_CONFIG", pin: "0x0C" }));
+        link.appendChild(button("INIT 成功", { type: "INIT_OK" }));
+        link.appendChild(button("请求写 pin 0xFF", { type: "REQUEST_WRITE_PIN", value: "0xFF" }));
+        link.appendChild(button("请求写 pin 0x0C", { type: "REQUEST_WRITE_PIN", value: "0x0C" }));
+        link.appendChild(button("确认写 pin", { type: "CONFIRM_WRITE_PIN" }));
+        link.appendChild(button("拒绝写 pin", { type: "DECLINE_WRITE_PIN" }));
+        refresh.appendChild(button("初始 Refresh", { type: "INITIAL_REFRESH" }));
+        refresh.appendChild(button("手动 Refresh", { type: "MANUAL_REFRESH" }));
+        refresh.appendChild(button("自动 Refresh", { type: "AUTO_REFRESH" }));
+        refresh.appendChild(button("传输成功", { type: "TRANSFER_SUCCESS" }));
+        refresh.appendChild(button("传输失败", { type: "TRANSFER_FAIL" }));
+        life.appendChild(button("Mac 睡眠", { type: "MAC_SLEEP" }));
+        life.appendChild(button("Mac 唤醒", { type: "MAC_WAKE" }));
+        life.appendChild(button("显示断开", { type: "DISPLAY_DISCONNECT" }));
+        life.appendChild(button("重连", { type: "RECONNECT" }));
+        life.appendChild(button("Style：Quota Focus", { type: "CHANGE_STYLE", style: "Quota Focus" }));
+        life.appendChild(button("Style：Balanced", { type: "CHANGE_STYLE", style: "Balanced" }));
+        life.appendChild(button("Style：Activity Focus", { type: "CHANGE_STYLE", style: "Activity Focus" }));
+      }
+
+      function renderTabs() {
+        var tabs = document.getElementById("tabs");
+        tabs.innerHTML = "";
+        scenes.forEach(function (scene, index) {
+          var b = document.createElement("button");
+          b.type = "button";
+          b.textContent = scene.title;
+          b.setAttribute("aria-selected", index === sceneIndex ? "true" : "false");
+          b.addEventListener("click", function () { resetScene(index); });
+          tabs.appendChild(b);
+        });
+        var scene = scenes[sceneIndex];
+        var box = document.getElementById("scene");
+        box.innerHTML = "<p>" + scene.blurb + "</p>";
+        var steps = document.createElement("div");
+        steps.className = "steps";
+        scene.steps.forEach(function (step, index) {
+          var b = document.createElement("button");
+          b.type = "button";
+          b.textContent = (index + 1) + ". " + step.label;
+          if (index < stepIndex) b.className = "done";
+          b.disabled = index !== stepIndex;
+          b.addEventListener("click", function () {
+            dispatch(step.action);
+            stepIndex = Math.min(stepIndex + 1, scene.steps.length);
+            render();
+          });
+          steps.appendChild(b);
+        });
+        box.appendChild(steps);
+        var note = document.createElement("div");
+        note.className = "step-note";
+        note.textContent = stepIndex >= scene.steps.length
+          ? "该场景步骤已走完。可用自由操作继续打，或重新点这个 tab 重置。"
+          : "当前步骤 " + (stepIndex + 1) + " / " + scene.steps.length + "。点当前步骤会真正 dispatch。";
+        box.appendChild(note);
+      }
+
+      function render() {
+        renderResult();
+        renderFields();
+        renderMenu();
+        renderTabs();
+      }
+
+      fillActions();
+      render();
+    })();
+  </script>
+</body>
+</html>
