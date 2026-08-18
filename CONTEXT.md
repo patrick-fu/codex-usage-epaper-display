@@ -20,6 +20,14 @@ _Avoid_: Peripheral, tag, device
 A complete 400×300 image prepared for the Bound Display.
 _Avoid_: Bitmap, screen payload
 
+**Display Style**:
+A selectable information hierarchy used to compose a Display Frame.
+_Avoid_: Layout variant, template
+
+**Local Activity Metric**:
+A token or throughput measure covering Codex activity observed on this Mac, distinct from an account quota.
+_Avoid_: Usage Window, account usage
+
 **Refresh**:
 The successful transfer of a new Display Frame followed by an e-paper refresh command.
 _Avoid_: Sync, update, push
