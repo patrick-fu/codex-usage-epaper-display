@@ -20,6 +20,10 @@ _Avoid_: Peripheral, tag, device
 A complete 400×300 image prepared for the Bound Display.
 _Avoid_: Bitmap, screen payload
 
+**Frame Fingerprint**:
+The semantic identity of a Display Frame used to decide whether an automatic Refresh is necessary. It includes visible data and configuration but excludes time passing, transport state, and other changes that should not cause a Refresh by themselves.
+_Avoid_: Pixel hash, last sent fingerprint
+
 **Display Style**:
 A selectable information hierarchy used to compose a Display Frame.
 _Avoid_: Layout variant, template
@@ -29,5 +33,9 @@ A token or throughput measure covering Codex activity observed on this Mac, dist
 _Avoid_: Usage Window, account usage
 
 **Refresh**:
-The successful transfer of a new Display Frame followed by an e-paper refresh command.
+The complete transfer of a new Display Frame followed by an e-paper refresh command without an observed transport failure. It is a best-effort commitment, not confirmation that the physical pixels were inspected.
 _Avoid_: Sync, update, push
+
+**Panel Trust**:
+Whether UsageInk may assume the Bound Display still shows the Display Frame from its last successfully completed Refresh. An interrupted display session or UsageInk restart invalidates this assumption even when the frame content has not changed.
+_Avoid_: Connection state, last sent frame
