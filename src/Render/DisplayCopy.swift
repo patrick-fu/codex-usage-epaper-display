@@ -83,10 +83,6 @@ enum DisplayCopy {
         return roundHalfAwayFromZero(value)
     }
 
-    static func formatPercentText(_ value: Double) -> String? {
-        formatPercent(value).map { "\($0)%" }
-    }
-
     static func formatTokens(_ value: Int) -> String {
         let magnitude = abs(value)
         if magnitude < 1_000 {
@@ -151,7 +147,7 @@ enum DisplayCopy {
     }
 
     static func degradedMessage(
-        availability: ObservationAvailability,
+        availability: PersistedAvailability,
         failure: String?,
         source: SourceKind,
         language: ResolvedInterfaceLanguage

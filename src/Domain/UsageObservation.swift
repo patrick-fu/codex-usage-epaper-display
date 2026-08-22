@@ -12,14 +12,6 @@ enum UsageWindowSlot: String, Sendable, Equatable {
     }
 }
 
-enum ObservationAvailability: String, Sendable, Equatable {
-    case unknown
-    case fresh
-    case stale
-    case authRequired
-    case unavailable
-}
-
 enum LocalMetricKind: String, Sendable, Equatable, CaseIterable {
     case today
     case weekTokens
@@ -35,7 +27,7 @@ struct UsageWindowObservation: Sendable, Equatable {
 }
 
 struct AccountObservation: Sendable, Equatable {
-    var availability: ObservationAvailability
+    var availability: PersistedAvailability
     var failure: String?
     var planType: String?
     var windows: [UsageWindowObservation]
@@ -49,7 +41,7 @@ struct AccountObservation: Sendable, Equatable {
 }
 
 struct LocalActivityObservation: Sendable, Equatable {
-    var availability: ObservationAvailability
+    var availability: PersistedAvailability
     var failure: String?
     var todayTokens: Int?
     var weekTokens: Int?
@@ -66,17 +58,4 @@ struct LocalActivityObservation: Sendable, Equatable {
         tps: nil,
         coverageComplete: false
     )
-
-    func value(for kind: LocalMetricKind) -> Double? {
-        switch kind {
-        case .today:
-            return todayTokens.map(Double.init)
-        case .weekTokens:
-            return weekTokens.map(Double.init)
-        case .cache:
-            return cacheHitRate
-        case .tps:
-            return tps
-        }
-    }
 }

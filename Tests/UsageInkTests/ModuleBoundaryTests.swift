@@ -66,6 +66,35 @@ final class ModuleBoundaryTests: XCTestCase {
         ))
     }
 
+    func testRenderSourcesRemainRAMOnly() throws {
+        let forbidden = [
+            "writeToFile",
+            "write(to:",
+            "Data.write",
+            "FileManager",
+            "FileHandle",
+            "OutputStream",
+            "createFile",
+            "replaceItemAt",
+            "pngData",
+            "tiffRepresentation",
+            "CGImageDestination",
+            "NSBitmapImageRep",
+            "NSImage",
+        ]
+        let files = try swiftFiles(in: RepoRoot.url().appendingPathComponent("src/Render"))
+        XCTAssertFalse(files.isEmpty)
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for token in forbidden {
+                XCTAssertFalse(
+                    text.contains(token),
+                    "\(file.lastPathComponent) contains \(token)"
+                )
+            }
+        }
+    }
+
     func testProjectKeepsSandboxAndHardenedRuntimeOff() throws {
         let project = try String(
             contentsOf: RepoRoot.url().appendingPathComponent("UsageInk.xcodeproj/project.pbxproj"),

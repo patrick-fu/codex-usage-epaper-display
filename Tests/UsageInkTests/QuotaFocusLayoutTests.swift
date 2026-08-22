@@ -28,4 +28,14 @@ final class QuotaFocusLayoutTests: XCTestCase {
         XCTAssertEqual(QuotaFocusLayout.tickerCellRects(count: 0), [])
         XCTAssertEqual(QuotaFocusLayout.tickerCellRects(count: 9).count, 5)
     }
+
+    func testTickerBadgeRectSitsBelowValueAndInsideCell() {
+        let cell = QuotaFocusLayout.tickerCellRects(count: 3)[0]
+        let badge = QuotaFocusLayout.tickerBadgeRect(in: cell)
+        let value = QuotaFocusLayout.tickerValueRect(in: cell, hasBadge: true)
+        XCTAssertEqual(badge.maxY, QuotaFocusLayout.tickerContentRect(in: cell).maxY)
+        XCTAssertLessThanOrEqual(value.maxY, badge.minY)
+        XCTAssertGreaterThan(badge.minX, cell.minX)
+        XCTAssertLessThan(badge.maxX, cell.maxX)
+    }
 }

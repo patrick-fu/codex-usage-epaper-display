@@ -20,7 +20,7 @@ final class DisplayCopyTests: XCTestCase {
         XCTAssertNil(DisplayCopy.formatPercent(100.1))
         XCTAssertNil(DisplayCopy.formatPercent(.nan))
         XCTAssertNil(DisplayCopy.formatPercent(.infinity))
-        XCTAssertEqual(DisplayCopy.formatPercentText(81), "81%")
+        XCTAssertEqual(DisplayCopy.formatPercent(81), 81)
     }
 
     func testTokenAndRateFormatting() {

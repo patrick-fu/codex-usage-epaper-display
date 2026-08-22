@@ -51,6 +51,86 @@ enum QuotaFocusLayout {
         height: footerHeight
     )
 
+    static let tickerCellHorizontalInset: CGFloat = 6
+    static let tickerCellVerticalInset: CGFloat = 8
+    static let tickerLabelHeight: CGFloat = 12
+    static let tickerBadgeHeight: CGFloat = 14
+    static let heroProgressTrackHeight: CGFloat = 8
+    static let heroProgressBottomInset: CGFloat = 18
+    static let heroValueTopInset: CGFloat = 28
+    static let heroBadgeHeight: CGFloat = 14
+
+    static var titleRuleRect: CGRect {
+        CGRect(
+            x: titleRect.minX,
+            y: titleRect.maxY - normalRule,
+            width: titleRect.width,
+            height: normalRule
+        )
+    }
+
+    static var tickerTopRuleRect: CGRect {
+        CGRect(x: tickerRect.minX, y: tickerRect.minY, width: tickerRect.width, height: strongRule)
+    }
+
+    static var tickerBottomRuleRect: CGRect {
+        CGRect(
+            x: tickerRect.minX,
+            y: tickerRect.maxY - strongRule,
+            width: tickerRect.width,
+            height: strongRule
+        )
+    }
+
+    static var heroProgressTrackRect: CGRect {
+        CGRect(
+            x: heroRect.minX,
+            y: heroRect.maxY - heroProgressBottomInset,
+            width: heroRect.width,
+            height: heroProgressTrackHeight
+        )
+    }
+
+    static var heroBadgeRect: CGRect {
+        CGRect(
+            x: heroRect.minX,
+            y: heroRect.minY + heroValueTopInset + heroValueLineHeight + 4,
+            width: heroRect.width,
+            height: heroBadgeHeight
+        )
+    }
+
+    static func tickerContentRect(in cell: CGRect) -> CGRect {
+        CGRect(
+            x: cell.minX + tickerCellHorizontalInset,
+            y: cell.minY + tickerCellVerticalInset,
+            width: cell.width - 2 * tickerCellHorizontalInset,
+            height: cell.height - 2 * tickerCellVerticalInset
+        )
+    }
+
+    static func tickerLabelRect(in cell: CGRect) -> CGRect {
+        let inset = tickerContentRect(in: cell)
+        return CGRect(x: inset.minX, y: inset.minY, width: inset.width, height: tickerLabelHeight)
+    }
+
+    static func tickerBadgeRect(in cell: CGRect) -> CGRect {
+        let inset = tickerContentRect(in: cell)
+        return CGRect(
+            x: inset.minX,
+            y: inset.maxY - tickerBadgeHeight,
+            width: inset.width,
+            height: tickerBadgeHeight
+        )
+    }
+
+    static func tickerValueRect(in cell: CGRect, hasBadge: Bool) -> CGRect {
+        let inset = tickerContentRect(in: cell)
+        let top = inset.minY + tickerLabelHeight + 2
+        let bottom = hasBadge ? tickerBadgeRect(in: cell).minY - 2 : inset.maxY
+        return CGRect(x: inset.minX, y: top, width: inset.width, height: max(0, bottom - top))
+    }
+
     static func tickerCellRects(count: Int) -> [CGRect] {
         let cells = min(max(count, 0), maxTickerCells)
         guard cells > 0 else { return [] }

@@ -70,22 +70,10 @@ enum QuotaFocusModelBuilder {
             local: input.localActivity
         )
         let hero = heroItem.map {
-            makeField(
-                $0,
-                input: input,
-                calendar: calendar,
-                language: language,
-                role: "hero"
-            )
+            makeField($0, input: input, calendar: calendar, language: language)
         }
         let ticker = tickerItems.prefix(QuotaFocusLayout.maxTickerCells).map {
-            makeField(
-                $0,
-                input: input,
-                calendar: calendar,
-                language: language,
-                role: "ticker"
-            )
+            makeField($0, input: input, calendar: calendar, language: language)
         }
         let unavailableMark = hero == nil ? DisplayCopy.emDash : nil
         return QuotaFocusFrameModel(
@@ -175,8 +163,7 @@ enum QuotaFocusModelBuilder {
         _ item: Item,
         input: DisplayFrameInput,
         calendar: Calendar,
-        language: ResolvedInterfaceLanguage,
-        role _: String
+        language: ResolvedInterfaceLanguage
     ) -> QuotaFocusFrameModel.Field {
         switch item {
         case .quota(let window):

@@ -24,12 +24,11 @@ enum FrameRasterizer {
             ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
             ctx.saveGState()
             ctx.clip(to: CGRect(x: 0, y: 0, width: width, height: height))
-            draw(model, in: ctx, language: model.language)
+            draw(model, in: ctx)
             ctx.restoreGState()
         }
         return PlaneEncoder.encode { x, y in
-            let row = height - 1 - y
-            let offset = (row * width + x) * 4
+            let offset = (y * width + x) * 4
             return inkColor(r: buffer[offset], g: buffer[offset + 1], b: buffer[offset + 2])
         }
     }
@@ -40,11 +39,10 @@ enum FrameRasterizer {
 
     private static func draw(
         _ model: QuotaFocusFrameModel,
-        in ctx: CGContext,
-        language: ResolvedInterfaceLanguage
+        in ctx: CGContext
     ) {
         ctx.clip(to: cgRect(QuotaFocusLayout.contentRect))
-        let lang = DisplayCopy.languageCode(language)
+        let lang = DisplayCopy.languageCode(model.language)
         drawHeader(model, in: ctx, languageCode: lang)
         if let hero = model.hero {
             drawHero(hero, in: ctx, languageCode: lang)
@@ -78,7 +76,6 @@ enum FrameRasterizer {
                 color: black,
                 in: CGRect(x: rect.maxX - planWidth, y: rect.minY, width: planWidth, height: rect.height - 4),
                 align: .right,
-                vertical: .center,
                 ctx: ctx
             )
             titleWidth = rect.width - planWidth - 8
@@ -89,10 +86,9 @@ enum FrameRasterizer {
             color: black,
             in: CGRect(x: rect.minX, y: rect.minY, width: titleWidth, height: rect.height - 4),
             align: .left,
-            vertical: .center,
             ctx: ctx
         )
-        fillRule(CGRect(x: rect.minX, y: rect.maxY - QuotaFocusLayout.normalRule, width: rect.width, height: QuotaFocusLayout.normalRule), ctx: ctx)
+        fillRule(QuotaFocusLayout.titleRuleRect, ctx: ctx)
     }
 
     private static func drawHero(
@@ -108,7 +104,6 @@ enum FrameRasterizer {
             color: black,
             in: CGRect(x: rect.minX, y: rect.minY + 8, width: rect.width * 0.55, height: 16),
             align: .left,
-            vertical: .center,
             ctx: ctx
         )
         if let secondary = field.secondaryText {
@@ -118,18 +113,15 @@ enum FrameRasterizer {
                 color: black,
                 in: CGRect(x: rect.minX + rect.width * 0.45, y: rect.minY + 8, width: rect.width * 0.55, height: 16),
                 align: .right,
-                vertical: .center,
                 ctx: ctx
             )
         }
-        let valueTop = rect.minY + 28
         drawText(
             field.displayedValue,
             font: font(size: QuotaFocusLayout.heroValueFontSize, languageCode: languageCode, heavy: true, monoDigits: true),
             color: ink,
-            in: CGRect(x: rect.minX, y: valueTop, width: rect.width, height: QuotaFocusLayout.heroValueLineHeight),
+            in: CGRect(x: rect.minX, y: rect.minY + QuotaFocusLayout.heroValueTopInset, width: rect.width, height: QuotaFocusLayout.heroValueLineHeight),
             align: .left,
-            vertical: .center,
             ctx: ctx
         )
         if let badge = field.badge {
@@ -137,15 +129,13 @@ enum FrameRasterizer {
                 badge,
                 font: font(size: QuotaFocusLayout.resetFontSize, languageCode: languageCode, heavy: false, monoDigits: false),
                 color: black,
-                in: CGRect(x: rect.minX, y: valueTop + QuotaFocusLayout.heroValueLineHeight + 4, width: rect.width, height: 14),
+                in: QuotaFocusLayout.heroBadgeRect,
                 align: .left,
-                vertical: .center,
                 ctx: ctx
             )
         }
         if let percent = field.progressPercent {
-            let track = CGRect(x: rect.minX, y: rect.maxY - 18, width: rect.width, height: 8)
-            drawProgress(percent: percent, in: track, fill: ink, ctx: ctx)
+            drawProgress(percent: percent, in: QuotaFocusLayout.heroProgressTrackRect, fill: ink, ctx: ctx)
         }
     }
 
@@ -155,8 +145,8 @@ enum FrameRasterizer {
         languageCode: String
     ) {
         let rect = QuotaFocusLayout.tickerRect
-        fillRule(CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: QuotaFocusLayout.strongRule), ctx: ctx)
-        fillRule(CGRect(x: rect.minX, y: rect.maxY - QuotaFocusLayout.strongRule, width: rect.width, height: QuotaFocusLayout.strongRule), ctx: ctx)
+        fillRule(QuotaFocusLayout.tickerTopRuleRect, ctx: ctx)
+        fillRule(QuotaFocusLayout.tickerBottomRuleRect, ctx: ctx)
         let cells = QuotaFocusLayout.tickerCellRects(count: fields.count)
         for (index, field) in fields.enumerated() {
             let cell = cells[index]
@@ -166,25 +156,32 @@ enum FrameRasterizer {
                     ctx: ctx
                 )
             }
-            let inset = CGRect(x: cell.minX + 6, y: cell.minY + 8, width: cell.width - 12, height: cell.height - 16)
             drawText(
                 field.label,
                 font: font(size: QuotaFocusLayout.tickerLabelFontSize, languageCode: languageCode, heavy: true, monoDigits: false),
                 color: black,
-                in: CGRect(x: inset.minX, y: inset.minY, width: inset.width, height: 14),
+                in: QuotaFocusLayout.tickerLabelRect(in: cell),
                 align: .left,
-                vertical: .center,
                 ctx: ctx
             )
             drawText(
                 field.displayedValue,
                 font: font(size: QuotaFocusLayout.tickerValueFontSize, languageCode: languageCode, heavy: true, monoDigits: true),
                 color: field.usesRed ? red : black,
-                in: CGRect(x: inset.minX, y: inset.minY + 16, width: inset.width, height: inset.height - 16),
+                in: QuotaFocusLayout.tickerValueRect(in: cell, hasBadge: field.badge != nil),
                 align: .left,
-                vertical: .center,
                 ctx: ctx
             )
+            if let badge = field.badge {
+                drawText(
+                    badge,
+                    font: font(size: QuotaFocusLayout.resetFontSize, languageCode: languageCode, heavy: false, monoDigits: false),
+                    color: black,
+                    in: QuotaFocusLayout.tickerBadgeRect(in: cell),
+                    align: .left,
+                    ctx: ctx
+                )
+            }
         }
     }
 
@@ -202,7 +199,6 @@ enum FrameRasterizer {
                 color: black,
                 in: CGRect(x: rect.minX, y: rect.minY, width: rect.width * 0.6, height: rect.height),
                 align: .left,
-                vertical: .center,
                 ctx: ctx
             )
         }
@@ -213,7 +209,6 @@ enum FrameRasterizer {
                 color: black,
                 in: CGRect(x: rect.minX + rect.width * 0.4, y: rect.minY, width: rect.width * 0.6, height: rect.height),
                 align: .right,
-                vertical: .center,
                 ctx: ctx
             )
         }
@@ -243,15 +238,11 @@ enum FrameRasterizer {
         in rect: CGRect,
         ctx: CGContext
     ) {
-        drawText(text, font: font, color: color, in: rect, align: .center, vertical: .center, ctx: ctx)
+        drawText(text, font: font, color: color, in: rect, align: .center, ctx: ctx)
     }
 
     private enum HorizontalAlign {
         case left, right, center
-    }
-
-    private enum VerticalAlign {
-        case center
     }
 
     private static func drawText(
@@ -260,10 +251,8 @@ enum FrameRasterizer {
         color: CGColor,
         in rect: CGRect,
         align: HorizontalAlign,
-        vertical: VerticalAlign,
         ctx: CGContext
     ) {
-        _ = vertical
         ctx.saveGState()
         ctx.clip(to: cgRect(rect))
         let attributes: [NSAttributedString.Key: Any] = [

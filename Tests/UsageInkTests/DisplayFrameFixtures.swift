@@ -1,4 +1,5 @@
 import CoreGraphics
+import CryptoKit
 import Foundation
 @testable import UsageInk
 
@@ -76,6 +77,37 @@ enum DisplayFrameFixtures {
             return .black
         }
         return .paper
+    }
+
+    static func staleAccount() -> AccountObservation {
+        var account = typicalAccount()
+        account.availability = .stale
+        return account
+    }
+
+    static func unavailableAccount() -> AccountObservation {
+        AccountObservation(
+            availability: .unavailable,
+            failure: "rateLimitUnavailable",
+            planType: "Plus",
+            windows: []
+        )
+    }
+
+    static func unavailableLocal() -> LocalActivityObservation {
+        LocalActivityObservation(
+            availability: .unknown,
+            failure: nil,
+            todayTokens: nil,
+            weekTokens: nil,
+            cacheHitRate: nil,
+            tps: nil,
+            coverageComplete: false
+        )
+    }
+
+    static func sha256Hex(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     static func contains(_ color: InkColor, in rect: CGRect, frame: DisplayFrame) -> Bool {
