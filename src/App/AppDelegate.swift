@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         PersistenceLocation.installTestHostIsolationIfNeeded()
+        ActivityLocation.installTestHostIsolationIfNeeded()
         _ = NSApp.setActivationPolicy(.accessory)
 
         let settings = SettingsPanelController()

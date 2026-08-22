@@ -6,6 +6,7 @@ final class ModuleBoundaryTests: XCTestCase {
             "App": ["AppKit", "Foundation"],
             "Runtime": ["Foundation"],
             "Domain": ["Foundation"],
+            "Activity": ["Foundation", "Darwin", "SQLite3", "CryptoKit"],
             "Persistence": ["Foundation", "Darwin"],
             "BLE": ["CoreBluetooth", "Foundation"],
             "Render": ["Foundation", "CoreGraphics", "CoreText", "CryptoKit"],

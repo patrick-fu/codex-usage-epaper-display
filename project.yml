@@ -40,6 +40,8 @@ targets:
         buildPhase: resources
         excludes:
           - Info.plist
+    dependencies:
+      - sdk: libsqlite3.tbd
     settings:
       base:
         PRODUCT_NAME: UsageInk
