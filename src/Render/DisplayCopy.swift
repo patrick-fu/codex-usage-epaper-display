@@ -84,17 +84,7 @@ enum DisplayCopy {
     }
 
     static func formatTokens(_ value: Int) -> String {
-        let magnitude = abs(value)
-        if magnitude < 1_000 {
-            return "\(value)"
-        }
-        if magnitude < 1_000_000 {
-            return trimTrailingZeros(formatFixed(Double(value) / 1_000, digits: 1)) + "K"
-        }
-        if magnitude < 1_000_000_000 {
-            return trimTrailingZeros(formatFixed(Double(value) / 1_000_000, digits: 2)) + "M"
-        }
-        return trimTrailingZeros(formatFixed(Double(value) / 1_000_000_000, digits: 2)) + "B"
+        MetricFormatting.formatTokens(value)
     }
 
     static func formatCacheRate(_ rate: Double) -> String? {

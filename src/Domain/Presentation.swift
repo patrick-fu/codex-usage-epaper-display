@@ -52,7 +52,7 @@ struct StatusSummaryFormatter: Sendable, Equatable {
 
     func summary(
         account: SourceAvailability,
-        local: SourceAvailability,
+        local: LocalActivityObservation = .unknown,
         displayUnavailable: Bool,
         bleLink: BLELinkState = .unbound,
         classification: BLEClassification? = nil
@@ -81,15 +81,34 @@ struct StatusSummaryFormatter: Sendable, Equatable {
         }
     }
 
-    private func localText(_ availability: SourceAvailability) -> String {
-        switch availability {
-        case .unknown:
+    private func localText(_ observation: LocalActivityObservation) -> String {
+        if let today = observation.todayTokens, let week = observation.weekTokens {
+            let todayText = MetricFormatting.formatTokens(today)
+            let weekText = MetricFormatting.formatTokens(week)
             switch language {
             case .english:
-                return "Local activity unknown"
+                return "Local Today \(todayText) · Local This Week \(weekText)"
             case .simplifiedChinese:
-                return "本机活动未知"
+                return "本机今日 \(todayText) · 本机本周 \(weekText)"
             }
+        }
+        if let failure = observation.failure {
+            switch failure {
+            case "sourceUnreadable", "sourcePermissionDenied":
+                return language == .english ? "Local source unreadable" : "本机来源不可读"
+            case "sourceUnavailable":
+                return language == .english ? "Local source unavailable" : "本机来源不可用"
+            case "sourceMalformed", "sourcePartialTail":
+                return language == .english ? "Local data partial" : "本机数据不完整"
+            default:
+                break
+            }
+        }
+        switch observation.availability {
+        case .unavailable:
+            return language == .english ? "Local source unavailable" : "本机来源不可用"
+        case .unknown, .fresh, .stale, .authRequired:
+            return language == .english ? "Local activity unknown" : "本机活动未知"
         }
     }
 
