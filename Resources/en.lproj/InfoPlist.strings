@@ -1,0 +1,2 @@
+/* Bluetooth usage */
+"NSBluetoothAlwaysUsageDescription" = "UsageInk uses Bluetooth to find, bind, and refresh the Bound Display.";
