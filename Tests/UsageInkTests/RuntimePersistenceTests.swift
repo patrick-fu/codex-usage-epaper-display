@@ -12,6 +12,7 @@ final class RuntimePersistenceTests: XCTestCase {
         state.preferences.language = .english
         state.preferences.redThreshold = 50
         state.preferences.modules.cache = true
+        state.preferences.modules.tps = true
         state.setupDone = true
         state.refreshRecord = RefreshRecord(
             lastSucceededFingerprint: "abc",
@@ -36,6 +37,7 @@ final class RuntimePersistenceTests: XCTestCase {
         XCTAssertEqual(snapshot.preferences.language, .english)
         XCTAssertEqual(snapshot.preferences.redThreshold, 50)
         XCTAssertTrue(snapshot.preferences.modules.cache)
+        XCTAssertTrue(snapshot.preferences.modules.tps)
         XCTAssertEqual(snapshot.displayStyle, .activityFocus)
         XCTAssertEqual(snapshot.panelTrust, .invalid)
         XCTAssertFalse(snapshot.hasReadyWakeupConfiguration)

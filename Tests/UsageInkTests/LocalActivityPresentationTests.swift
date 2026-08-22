@@ -70,6 +70,83 @@ final class LocalActivityPresentationTests: XCTestCase {
         XCTAssertFalse(box.snapshot?.statusSummary.contains("jsonl") ?? false)
     }
 
+    func testCacheAndTPSLabelsAndValuesRenderHonestly() {
+        var preferences = DisplayPreferences.default
+        preferences.modules.cache = true
+        preferences.modules.tps = true
+        let complete = LocalActivityObservation(
+            availability: .fresh,
+            failure: nil,
+            todayTokens: 10,
+            weekTokens: 10,
+            cacheHitRate: 0,
+            tps: 0,
+            coverageComplete: true
+        )
+        let quota = QuotaFocusModelBuilder.build(
+            DisplayFrameFixtures.input(preferences: preferences, local: complete)
+        )
+        XCTAssertEqual(quota.ticker.first { $0.id == "local.cache" }?.label, "Cache hit rate")
+        XCTAssertEqual(quota.ticker.first { $0.id == "local.cache" }?.displayedValue, "0%")
+        XCTAssertEqual(quota.ticker.first { $0.id == "local.tps" }?.label, "TPS")
+        XCTAssertEqual(quota.ticker.first { $0.id == "local.tps" }?.displayedValue, "0.0")
+        XCTAssertEqual(quota.ticker.first { $0.id == "local.tps" }?.semanticValue, "0.0")
+
+        let chinese = QuotaFocusModelBuilder.build(
+            DisplayFrameFixtures.input(
+                preferences: preferences,
+                local: complete,
+                preferredLanguages: ["zh-Hans"]
+            )
+        )
+        XCTAssertEqual(chinese.ticker.first { $0.id == "local.cache" }?.label, "缓存命中率")
+        XCTAssertEqual(chinese.ticker.first { $0.id == "local.tps" }?.label, "TPS")
+
+        let unknown = LocalActivityObservation.unknown
+        let missing = QuotaFocusModelBuilder.build(
+            DisplayFrameFixtures.input(preferences: preferences, local: unknown)
+        )
+        XCTAssertEqual(missing.ticker.first { $0.id == "local.cache" }?.displayedValue, DisplayCopy.emDash)
+        XCTAssertEqual(missing.ticker.first { $0.id == "local.tps" }?.displayedValue, DisplayCopy.emDash)
+        XCTAssertNil(missing.ticker.first { $0.id == "local.cache" }?.semanticValue)
+        XCTAssertNil(missing.ticker.first { $0.id == "local.tps" }?.semanticValue)
+        XCTAssertNotEqual(missing.ticker.first { $0.id == "local.tps" }?.displayedValue, "0.0")
+        XCTAssertNotEqual(missing.ticker.first { $0.id == "local.cache" }?.displayedValue, "0%")
+
+        let incomplete = LocalActivityObservation(
+            availability: .fresh,
+            failure: "sourcePartialTail",
+            todayTokens: 10,
+            weekTokens: 10,
+            cacheHitRate: 0,
+            tps: 0.1,
+            coverageComplete: false
+        )
+        let partial = QuotaFocusModelBuilder.build(
+            DisplayFrameFixtures.input(preferences: preferences, local: incomplete)
+        )
+        XCTAssertEqual(partial.ticker.first { $0.id == "local.cache" }?.displayedValue, DisplayCopy.emDash)
+        XCTAssertEqual(partial.ticker.first { $0.id == "local.tps" }?.displayedValue, "0.1")
+        XCTAssertEqual(partial.ticker.first { $0.id == "local.today" }?.displayedValue, "10")
+
+        let outputOnly = LocalActivityObservation(
+            availability: .fresh,
+            failure: nil,
+            todayTokens: 5,
+            weekTokens: 5,
+            cacheHitRate: nil,
+            tps: 0,
+            coverageComplete: true
+        )
+        let noInput = QuotaFocusModelBuilder.build(
+            DisplayFrameFixtures.input(preferences: preferences, local: outputOnly)
+        )
+        XCTAssertEqual(noInput.ticker.first { $0.id == "local.cache" }?.displayedValue, DisplayCopy.emDash)
+        XCTAssertNotEqual(noInput.ticker.first { $0.id == "local.cache" }?.displayedValue, "0%")
+        XCTAssertEqual(noInput.ticker.first { $0.id == "local.tps" }?.displayedValue, "0.0")
+        XCTAssertEqual(noInput.ticker.first { $0.id == "local.today" }?.displayedValue, "5")
+    }
+
     func testCompleteZeroIsNotUnknownCopy() {
         let zero = LocalActivityObservation(
             availability: .fresh,

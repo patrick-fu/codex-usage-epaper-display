@@ -16,6 +16,9 @@ final class ActivityStore: @unchecked Sendable {
     private var db: OpaquePointer?
     private var openedURL: URL?
 
+    var simulatedOpenFailure = false
+    var simulatedQueryFailure = false
+
     init(root: URL) {
         self.root = root
     }
@@ -99,13 +102,13 @@ final class ActivityStore: @unchecked Sendable {
         do {
             try openOrRebuild()
         } catch {
-            return unavailableObservation(prior: prior)
+            return databaseUnavailableObservation()
         }
         let cursors: [String: SourceCursorRecord]
         do {
             cursors = try loadCursors()
         } catch {
-            return unavailableObservation(prior: prior)
+            return databaseUnavailableObservation()
         }
         let plan = ActivityScanner.scan(
             codexHome: codexHome,
@@ -115,7 +118,14 @@ final class ActivityStore: @unchecked Sendable {
             limits: limits
         )
         if plan.status == .budgetExhausted {
-            return retainedObservation(prior: prior, failure: "sourceScanTimeout")
+            return retainedObservation(
+                prior: prior,
+                failure: "sourceScanTimeout",
+                now: now,
+                calendar: calendar,
+                pollStart: pollStart,
+                tpsWindowMinutes: tpsWindowMinutes
+            )
         }
         if !plan.rootsExisted {
             if prior.todayTokens == nil {
@@ -124,12 +134,26 @@ final class ActivityStore: @unchecked Sendable {
             return prior
         }
         if !plan.commitsResults {
-            return retainedObservation(prior: prior, failure: plan.failure ?? "unknown")
+            return retainedObservation(
+                prior: prior,
+                failure: plan.failure ?? "unknown",
+                now: now,
+                calendar: calendar,
+                pollStart: pollStart,
+                tpsWindowMinutes: tpsWindowMinutes
+            )
         }
         do {
             try apply(plan, now: now)
         } catch {
-            return retainedObservation(prior: prior, failure: "unknown")
+            return retainedObservation(
+                prior: prior,
+                failure: "unknown",
+                now: now,
+                calendar: calendar,
+                pollStart: pollStart,
+                tpsWindowMinutes: tpsWindowMinutes
+            )
         }
         guard let totals = try? queryTotals(
             now: now,
@@ -137,7 +161,7 @@ final class ActivityStore: @unchecked Sendable {
             pollStart: pollStart,
             tpsWindowMinutes: tpsWindowMinutes
         ) else {
-            return unavailableObservation(prior: prior)
+            return databaseUnavailableObservation()
         }
         let lastSuccess = Int(now.timeIntervalSince1970.rounded(.towardZero))
         let availability = LocalActivityMetrics.availability(
@@ -176,35 +200,52 @@ final class ActivityStore: @unchecked Sendable {
         return try loadFacts()
     }
 
-    private func retainedObservation(prior: LocalActivityObservation, failure: String) -> LocalActivityObservation {
+    private func retainedObservation(
+        prior: LocalActivityObservation,
+        failure: String,
+        now: Date,
+        calendar: Calendar,
+        pollStart: Date,
+        tpsWindowMinutes: Int
+    ) -> LocalActivityObservation {
         var retained = prior
         retained.failure = failure
         retained.coverageComplete = false
-        if prior.todayTokens == nil {
-            retained.availability = prior.availability == .unknown ? .unknown : .unavailable
+        retained.cacheHitRate = nil
+        guard let totals = try? queryTotals(
+            now: now,
+            calendar: calendar,
+            pollStart: pollStart,
+            tpsWindowMinutes: tpsWindowMinutes
+        ) else {
+            return databaseUnavailableObservation()
         }
+        if prior.todayTokens == nil, (try? maxLastSeenAt()) == nil {
+            retained.availability = prior.availability == .unknown ? .unknown : .unavailable
+            return retained
+        }
+        retained.todayTokens = totals.todayTokens
+        retained.weekTokens = totals.weekTokens
+        retained.tps = totals.tps(windowMinutes: tpsWindowMinutes)
         return retained
     }
 
-    private func unavailableObservation(prior: LocalActivityObservation) -> LocalActivityObservation {
-        if prior.todayTokens == nil {
-            return LocalActivityObservation(
-                availability: .unavailable,
-                failure: "unknown",
-                todayTokens: nil,
-                weekTokens: nil,
-                cacheHitRate: nil,
-                tps: nil,
-                coverageComplete: false
-            )
-        }
-        var retained = prior
-        retained.failure = prior.failure ?? "unknown"
-        retained.coverageComplete = false
-        return retained
+    private func databaseUnavailableObservation() -> LocalActivityObservation {
+        LocalActivityObservation(
+            availability: .unavailable,
+            failure: "unknown",
+            todayTokens: nil,
+            weekTokens: nil,
+            cacheHitRate: nil,
+            tps: nil,
+            coverageComplete: false
+        )
     }
 
     private func openOrRebuild() throws {
+        if simulatedOpenFailure {
+            throw ActivityStoreError.openFailed
+        }
         try FileManager.default.createDirectory(
             at: root,
             withIntermediateDirectories: true,
@@ -459,6 +500,9 @@ final class ActivityStore: @unchecked Sendable {
         pollStart: Date,
         tpsWindowMinutes: Int
     ) throws -> LocalTotals {
+        if simulatedQueryFailure {
+            throw ActivityStoreError.openFailed
+        }
         guard let today = LocalActivityMetrics.dayRange(containing: now, calendar: calendar),
               let week = LocalActivityMetrics.weekRange(containing: now, calendar: calendar) else {
             throw ActivityStoreError.openFailed

@@ -95,6 +95,48 @@ final class SettingsPanelTests: XCTestCase {
         }
         XCTAssertEqual(preferences.displayStyle, .balanced)
         XCTAssertEqual(try preferences.validated().title, "CODEX DESK")
+        XCTAssertFalse(preferences.modules.cache)
+        XCTAssertFalse(preferences.modules.tps)
+        XCTAssertEqual(preferences.tpsWindowMinutes, 15)
+    }
+
+    func testSavePersistsCacheTPSModulesAndLookback() {
+        let panel = SettingsPanelController()
+        let box = CommandBox()
+        panel.submit = { command in
+            box.command = command
+        }
+        panel.apply(
+            RuntimeSnapshot(
+                statusSummary: "—",
+                binding: .unbound,
+                displayStyle: .quotaFocus,
+                hasReadyWakeupConfiguration: false,
+                showsFirstRunDisclosure: false
+            )
+        )
+        let cache = panel.view(withIdentifier: "settings.modules.cache") as? NSButton
+        let tps = panel.view(withIdentifier: "settings.modules.tps") as? NSButton
+        let lookback = panel.view(withIdentifier: "settings.tpsWindowMinutes") as? NSPopUpButton
+        XCTAssertEqual(cache?.state, .off)
+        XCTAssertEqual(tps?.state, .off)
+        XCTAssertEqual(lookback?.titleOfSelectedItem, "15")
+        cache?.state = .on
+        tps?.state = .on
+        _ = cache?.sendAction(cache?.action, to: cache?.target)
+        _ = tps?.sendAction(tps?.action, to: tps?.target)
+        lookback?.selectItem(withTitle: "3")
+        _ = lookback?.sendAction(lookback?.action, to: lookback?.target)
+        (panel.view(withIdentifier: "settings.save") as? NSButton)?.performClick(nil)
+        guard case .savePreferences(let preferences) = box.command else {
+            return XCTFail("expected savePreferences batch")
+        }
+        XCTAssertTrue(preferences.modules.cache)
+        XCTAssertTrue(preferences.modules.tps)
+        XCTAssertEqual(preferences.tpsWindowMinutes, 3)
+        XCTAssertTrue(DisplayPreferences.default.modules.cache == false)
+        XCTAssertTrue(DisplayPreferences.default.modules.tps == false)
+        XCTAssertEqual(DisplayPreferences.default.tpsWindowMinutes, 15)
     }
 
     func testCorruptAndUnsupportedSnapshotsShowBilingualResetGuidance() {

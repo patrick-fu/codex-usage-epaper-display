@@ -57,6 +57,34 @@ final class BalancedModelTests: XCTestCase {
         XCTAssertEqual(model.unavailableMark, DisplayCopy.emDash)
     }
 
+    func testCacheAndTPSRenderZeroOnlyWhenAvailable() {
+        var preferences = DisplayPreferences.default
+        preferences.displayStyle = .balanced
+        preferences.modules.cache = true
+        preferences.modules.tps = true
+        let complete = LocalActivityObservation(
+            availability: .fresh,
+            failure: nil,
+            todayTokens: 0,
+            weekTokens: 0,
+            cacheHitRate: 0,
+            tps: 0,
+            coverageComplete: true
+        )
+        let zero = BalancedModelBuilder.build(
+            DisplayFrameFixtures.input(preferences: preferences, local: complete)
+        )
+        XCTAssertEqual(zero.entries.first { $0.id == "local.cache" }?.displayedValue, "0%")
+        XCTAssertEqual(zero.entries.first { $0.id == "local.tps" }?.displayedValue, "0.0")
+
+        let missing = BalancedModelBuilder.build(
+            DisplayFrameFixtures.input(preferences: preferences, local: .unknown)
+        )
+        XCTAssertEqual(missing.entries.first { $0.id == "local.cache" }?.displayedValue, DisplayCopy.emDash)
+        XCTAssertEqual(missing.entries.first { $0.id == "local.tps" }?.displayedValue, DisplayCopy.emDash)
+        XCTAssertNotEqual(missing.entries.first { $0.id == "local.tps" }?.displayedValue, "0.0")
+    }
+
     func testUnavailableValuesNeverBecomeZero() {
         var preferences = DisplayPreferences.default
         preferences.displayStyle = .balanced

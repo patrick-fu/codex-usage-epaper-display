@@ -32,6 +32,7 @@ final class ActivityDiscoveryTests: XCTestCase {
         XCTAssertEqual(observation.weekTokens, 88)
         XCTAssertEqual(observation.availability, .fresh)
         XCTAssertTrue(observation.coverageComplete)
+        XCTAssertEqual(observation.cacheHitRate, 0)
         let store = ActivityStore(root: root)
         XCTAssertEqual(try store.loadCursorsForTests().count, 1)
         XCTAssertEqual(try store.loadFactsForTests().count, 1)
@@ -62,6 +63,7 @@ final class ActivityDiscoveryTests: XCTestCase {
         XCTAssertEqual(other.path.withCString { src in hardURL.path.withCString { dst in Darwin.link(src, dst) } }, 0)
         let (_, observation) = ActivityFixtures.ingest(home: home, root: root, now: now)
         XCTAssertNil(observation.todayTokens)
+        XCTAssertNil(observation.cacheHitRate)
         XCTAssertEqual(observation.coverageComplete, false)
         XCTAssertEqual(observation.failure, "sourceUnreadable")
         XCTAssertEqual(try ActivityStore(root: root).loadFactsForTests().count, 0)
@@ -101,6 +103,8 @@ final class ActivityDiscoveryTests: XCTestCase {
         XCTAssertEqual(rejected.todayTokens, 22)
         XCTAssertEqual(rejected.failure, "sourceUnreadable")
         XCTAssertEqual(rejected.coverageComplete, false)
+        XCTAssertNil(rejected.cacheHitRate)
+        XCTAssertEqual(rejected.tps, first.tps)
         XCTAssertEqual(try store.loadFactsForTests().count, 1)
         XCTAssertEqual(try store.loadFactsForTests().first?.sourceKey, ActivityFixtures.sourceKeyA)
     }
@@ -260,6 +264,7 @@ final class ActivityDiscoveryTests: XCTestCase {
         XCTAssertEqual(observation.todayTokens, 0)
         XCTAssertEqual(observation.weekTokens, 0)
         XCTAssertEqual(observation.tps, 0)
+        XCTAssertNil(observation.cacheHitRate)
         XCTAssertTrue(observation.coverageComplete)
         XCTAssertNil(observation.failure)
     }

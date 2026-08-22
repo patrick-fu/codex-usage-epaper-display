@@ -32,9 +32,16 @@ final class DisplayCopyTests: XCTestCase {
         XCTAssertEqual(DisplayCopy.formatTokens(1_230_000), "1.23M")
         XCTAssertEqual(DisplayCopy.formatTokens(1_235_000), "1.24M")
         XCTAssertEqual(DisplayCopy.formatCacheRate(0.255), "26%")
+        XCTAssertEqual(DisplayCopy.formatCacheRate(0), "0%")
+        XCTAssertEqual(DisplayCopy.formatCacheRate(1), "100%")
+        XCTAssertNil(DisplayCopy.formatCacheRate(-0.01))
+        XCTAssertNil(DisplayCopy.formatCacheRate(1.01))
+        XCTAssertNil(DisplayCopy.formatCacheRate(.nan))
         XCTAssertEqual(DisplayCopy.formatTPS(0), "0.0")
         XCTAssertEqual(DisplayCopy.formatTPS(1.25), "1.3")
+        XCTAssertEqual(DisplayCopy.formatTPS(0.025), "0.0")
         XCTAssertNil(DisplayCopy.formatTPS(-1))
+        XCTAssertNil(DisplayCopy.formatTPS(.infinity))
     }
 
     func testDegradedCopyTableIsExact() {

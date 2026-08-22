@@ -118,6 +118,78 @@ final class ActivityStoreTests: XCTestCase {
         XCTAssertEqual(observation.availability, .fresh)
     }
 
+    func testIngestOpenFailureWithHistoryPublishesUnavailableNotPriorValues() throws {
+        let home = try ActivityFixtures.makeHome()
+        let root = try ActivityFixtures.makeStoreRoot()
+        addTeardownBlock { try? FileManager.default.removeItem(at: home); try? FileManager.default.removeItem(at: root) }
+        let now = Date(timeIntervalSince1970: 1_787_356_800)
+        try ActivityFixtures.writeRollout(
+            home: home,
+            layer: .sessions,
+            basename: ActivityFixtures.rolloutName(),
+            lines: [ActivityFixtures.tokenLine(timestamp: "2026-08-22T00:00:00.000Z", input: 8, cached: 2, output: 4)]
+        )
+        let (store, first) = ActivityFixtures.ingest(home: home, root: root, now: now)
+        XCTAssertEqual(first.todayTokens, 12)
+        XCTAssertEqual(first.tps ?? -1, 4.0 / 900.0, accuracy: 1e-12)
+        XCTAssertEqual(first.availability, .fresh)
+        store.simulatedOpenFailure = true
+        let failed = store.ingest(
+            codexHome: home,
+            pollStart: now,
+            now: now,
+            calendar: ActivityFixtures.calendar(timeZone: TimeZone(secondsFromGMT: 0)!),
+            timeZone: TimeZone(secondsFromGMT: 0)!,
+            tpsWindowMinutes: 15,
+            prior: first
+        )
+        assertDatabaseUnavailableHidesLocalMetrics(failed, prior: first)
+    }
+
+    func testRetainedQueryFailureWithHistoryPublishesUnavailableNotPriorTPS() throws {
+        let home = try ActivityFixtures.makeHome()
+        let root = try ActivityFixtures.makeStoreRoot()
+        addTeardownBlock { try? FileManager.default.removeItem(at: home); try? FileManager.default.removeItem(at: root) }
+        let now = Date(timeIntervalSince1970: 1_787_356_800)
+        let url = try ActivityFixtures.writeRollout(
+            home: home,
+            layer: .sessions,
+            basename: ActivityFixtures.rolloutName(),
+            lines: [ActivityFixtures.tokenLine(timestamp: "2026-08-22T00:00:00.000Z", input: 8, cached: 2, output: 4)]
+        )
+        let (store, first) = ActivityFixtures.ingest(home: home, root: root, now: now)
+        XCTAssertEqual(first.todayTokens, 12)
+        XCTAssertNotNil(first.tps)
+        try Data((ActivityFixtures.tokenLine(timestamp: "2026-08-22T01:00:00.000Z", input: 99, output: 9) + "\n").utf8).write(to: url)
+        store.simulatedQueryFailure = true
+        let failed = store.ingest(
+            codexHome: home,
+            pollStart: now,
+            now: now,
+            calendar: ActivityFixtures.calendar(timeZone: TimeZone(secondsFromGMT: 0)!),
+            timeZone: TimeZone(secondsFromGMT: 0)!,
+            tpsWindowMinutes: 15,
+            prior: first
+        )
+        XCTAssertEqual(failed.failure, "unknown")
+        assertDatabaseUnavailableHidesLocalMetrics(failed, prior: first)
+        store.simulatedQueryFailure = false
+        let recovered = store.ingest(
+            codexHome: home,
+            pollStart: now,
+            now: now,
+            calendar: ActivityFixtures.calendar(timeZone: TimeZone(secondsFromGMT: 0)!),
+            timeZone: TimeZone(secondsFromGMT: 0)!,
+            tpsWindowMinutes: 15,
+            prior: failed
+        )
+        XCTAssertEqual(recovered.todayTokens, 12)
+        XCTAssertEqual(recovered.tps ?? -1, 4.0 / 900.0, accuracy: 1e-12)
+        XCTAssertNil(recovered.cacheHitRate)
+        XCTAssertEqual(recovered.coverageComplete, false)
+        XCTAssertEqual(recovered.failure, "sourceMalformed")
+    }
+
     func testStartupRehydrateUsesSqliteNotStateFreshness() throws {
         let home = try ActivityFixtures.makeHome()
         let root = try ActivityFixtures.makeStoreRoot()
@@ -142,6 +214,72 @@ final class ActivityStoreTests: XCTestCase {
         )
         XCTAssertEqual(rehydrated.todayTokens, 4)
         XCTAssertEqual(rehydrated.availability, .fresh)
+    }
+
+    private func assertDatabaseUnavailableHidesLocalMetrics(
+        _ observation: LocalActivityObservation,
+        prior: LocalActivityObservation
+    ) {
+        XCTAssertEqual(observation.availability, .unavailable)
+        XCTAssertNil(observation.todayTokens)
+        XCTAssertNil(observation.weekTokens)
+        XCTAssertNil(observation.cacheHitRate)
+        XCTAssertNil(observation.tps)
+        XCTAssertEqual(observation.coverageComplete, false)
+        XCTAssertNotEqual(observation.tps, prior.tps)
+
+        var preferences = DisplayPreferences.default
+        preferences.modules.cache = true
+        preferences.modules.tps = true
+        let input = DisplayFrameFixtures.input(preferences: preferences, local: observation)
+        let fields = localFields(from: input)
+        XCTAssertGreaterThanOrEqual(fields.count, 4)
+        for field in fields {
+            XCTAssertEqual(field.displayedValue, DisplayCopy.emDash, field.id)
+            XCTAssertNil(field.semanticValue, field.id)
+            XCTAssertNotEqual(field.displayedValue, "0")
+            XCTAssertNotEqual(field.displayedValue, "0%")
+            XCTAssertNotEqual(field.displayedValue, "0.0")
+            XCTAssertEqual(field.availability, "unavailable")
+        }
+
+        let menu = StatusSummaryFormatter(language: .english).summary(
+            account: SourceAvailability.unknown,
+            local: observation,
+            displayUnavailable: false
+        )
+        XCTAssertEqual(menu, "— · Local source unavailable")
+        XCTAssertFalse(menu.contains("Local Today"))
+        XCTAssertFalse(menu.contains("0.0"))
+
+        let document = FrameFingerprint.document(QuotaFocusModelBuilder.build(input))
+        guard case .object(let root) = document, case .array(let visible) = root["visible"] else {
+            return XCTFail("fingerprint")
+        }
+        XCTAssertEqual(root["localAvailability"], .string("unavailable"))
+        for id in ["local.today", "local.weekTokens", "local.cache", "local.tps"] {
+            let field = visible.first { value in
+                if case .object(let object) = value { return object["id"] == .string(id) }
+                return false
+            }
+            guard case .object(let object) = field else {
+                return XCTFail("missing \(id)")
+            }
+            XCTAssertEqual(object["value"], .null, id)
+            XCTAssertEqual(object["availability"], .string("unavailable"), id)
+        }
+    }
+
+    private func localFields(from input: DisplayFrameInput) -> [DisplayField] {
+        var preferences = input.preferences
+        preferences.displayStyle = .quotaFocus
+        let quota = QuotaFocusModelBuilder.build(DisplayFrameFixtures.input(preferences: preferences, local: input.localActivity))
+        preferences.displayStyle = .balanced
+        let balanced = BalancedModelBuilder.build(DisplayFrameFixtures.input(preferences: preferences, local: input.localActivity))
+        preferences.displayStyle = .activityFocus
+        let activity = ActivityFocusModelBuilder.build(DisplayFrameFixtures.input(preferences: preferences, local: input.localActivity))
+        return (quota.ticker + balanced.entries + [activity.primary].compactMap { $0 } + activity.secondary)
+            .filter { $0.id.hasPrefix("local.") }
     }
 
     private func iso(_ date: Date) -> String {
