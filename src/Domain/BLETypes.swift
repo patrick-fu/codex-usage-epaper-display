@@ -142,7 +142,12 @@ enum DisplayLinkUUIDs {
     static let missingFirmware: UInt8 = 0x15
     static let appleDefaultMTU = 20
     static let initOpcode: UInt8 = 0x01
+    static let refreshOpcode: UInt8 = 0x05
+    static let writeImageOpcode: UInt8 = 0x30
     static let setConfigOpcode: UInt8 = 0x90
+    static let writeImageFlagRed: UInt8 = 0x01
+    static let writeImageFlagFirst: UInt8 = 0x02
+    static let writeImageFlagRLE: UInt8 = 0x04
     static let forbiddenOpcodes: Set<UInt8> = [0x00, 0x02, 0x03, 0x04, 0x06, 0x91, 0x92, 0x99]
 }
 

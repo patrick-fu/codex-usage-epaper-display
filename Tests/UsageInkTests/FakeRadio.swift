@@ -69,6 +69,10 @@ final class FakeRadio: RadioTransport {
     private(set) var writes: [BLEWriteRecord] = []
     private(set) var scanActive = false
     var holdWriteAcknowledgements = false
+    var maximumWriteWithoutResponse = 512
+    var maximumWriteWithResponse = 512
+    var writeWithoutResponseCredits: Int?
+    private(set) var writesRejectedForFlowControl = 0
     private var connected: UUID?
     private var deferredWriteAcks: [(identifier: UUID, characteristic: UUID, failed: Bool)] = []
 
@@ -157,7 +161,40 @@ final class FakeRadio: RadioTransport {
         }
     }
 
+    func maximumWriteValueLength(identifier: UUID, type: RadioWriteType) -> Int {
+        _ = identifier
+        return type == .withResponse ? maximumWriteWithResponse : maximumWriteWithoutResponse
+    }
+
+    func canSendWriteWithoutResponse(identifier: UUID) -> Bool {
+        _ = identifier
+        guard let credits = writeWithoutResponseCredits else {
+            return true
+        }
+        return credits > 0
+    }
+
+    func grantWriteWithoutResponseCredit() {
+        writeWithoutResponseCredits = (writeWithoutResponseCredits ?? 0) + 1
+        if let connected {
+            emit { self.delegate?.radioIsReadyToSendWriteWithoutResponse(identifier: connected) }
+        }
+    }
+
+    func setUnlimitedWriteWithoutResponse() {
+        writeWithoutResponseCredits = nil
+        if let connected {
+            emit { self.delegate?.radioIsReadyToSendWriteWithoutResponse(identifier: connected) }
+        }
+    }
+
     func write(identifier: UUID, characteristic: UUID, data: Data, type: RadioWriteType) {
+        if type == .withoutResponse, !canSendWriteWithoutResponse(identifier: identifier) {
+            writesRejectedForFlowControl += 1
+        }
+        if type == .withoutResponse, let credits = writeWithoutResponseCredits, credits > 0 {
+            writeWithoutResponseCredits = credits - 1
+        }
         writes.append(
             BLEWriteRecord(
                 identifier: identifier,

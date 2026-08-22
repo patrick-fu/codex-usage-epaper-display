@@ -20,6 +20,7 @@ protocol RadioTransportDelegate: AnyObject {
     )
     func radioDidUpdateValue(identifier: UUID, characteristic: UUID, value: Data)
     func radioDidWrite(identifier: UUID, characteristic: UUID, failed: Bool)
+    func radioIsReadyToSendWriteWithoutResponse(identifier: UUID)
 }
 
 protocol RadioTransport: AnyObject {
@@ -34,6 +35,8 @@ protocol RadioTransport: AnyObject {
     func setNotify(identifier: UUID, characteristic: UUID, enabled: Bool)
     func read(identifier: UUID, characteristic: UUID)
     func write(identifier: UUID, characteristic: UUID, data: Data, type: RadioWriteType)
+    func maximumWriteValueLength(identifier: UUID, type: RadioWriteType) -> Int
+    func canSendWriteWithoutResponse(identifier: UUID) -> Bool
 }
 
 final class DispatchDisplayClock: DisplayClock {

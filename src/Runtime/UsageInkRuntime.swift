@@ -66,6 +66,9 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
     private let codex: CodexPollingDependencies
     private var accountObservation: AccountObservation = .unknown
     private var pollRunning = false
+    private var manualRefreshPending = false
+    private var transferActive = false
+    private var queuedManualAfterTransfer = false
 
     init(
         language: ResolvedInterfaceLanguage = .resolveSystem(),
@@ -185,6 +188,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             bindCandidates = []
             panelTrust = .invalid
             link.confirmBoundIdentity(session.identifier)
+            startTransferIfNeeded()
         } catch PersistenceError.readOnlyUnsupportedSchema {
             rejectReadySession()
             applyLoad(store.load())
@@ -220,8 +224,43 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         publish()
     }
 
+    func displayLinkDidCompleteRefresh() {
+        dispatchPrecondition(condition: .onQueue(queue))
+        transferActive = false
+        manualRefreshPending = false
+        panelTrust = .assumed
+        if let fingerprint = compositionSession.inFlightFrame?.fingerprint {
+            var candidate = productState
+            candidate.setupDone = true
+            candidate.refreshRecord.lastSucceededFingerprint = fingerprint
+            candidate.refreshRecord.lastSuccessfulRefreshAt = Int(now().timeIntervalSince1970)
+            persistRefreshSuccess(candidate)
+        }
+        _ = DisplayCompositionCoordinator.finishInFlight(session: &compositionSession)
+        if queuedManualAfterTransfer {
+            queuedManualAfterTransfer = false
+            requestManualRefresh()
+        }
+        publish()
+    }
+
+    func displayLinkDidFailRefresh(_ classification: BLEClassification) {
+        dispatchPrecondition(condition: .onQueue(queue))
+        transferActive = false
+        manualRefreshPending = false
+        panelTrust = .invalid
+        lastBLEClassification = classification
+        _ = DisplayCompositionCoordinator.finishInFlight(session: &compositionSession)
+        if queuedManualAfterTransfer {
+            queuedManualAfterTransfer = false
+            requestManualRefresh()
+        }
+        publish()
+    }
+
     func displayLinkDidDisconnect() {
         dispatchPrecondition(condition: .onQueue(queue))
+        transferActive = false
         clearReadySession()
         if binding == .bound, bleLink == .ready {
             bleLink = .disconnected
@@ -233,8 +272,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
     private func handle(_ command: RuntimeCommand) {
         switch command {
         case .refreshNow:
-            startAccountPoll()
-            refreshLocalActivity(forceScan: true)
+            requestManualRefresh()
         case .rebuildLocalMetrics:
             rebuildLocalMetrics()
         case .findAndBindDisplay:
@@ -384,7 +422,6 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             shouldPresentSettingsOnLaunch = false
             storageClassification = nil
             isPersistenceWritable = true
-            panelTrust = .invalid
             if enqueueConfiguration {
                 DisplayCompositionCoordinator.applyConfiguration(
                     session: &compositionSession,
@@ -486,16 +523,86 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
 
     private func fallbackCompositionInput(preferences: DisplayPreferences) -> DisplayFrameInput {
         var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = .current
+        calendar.timeZone = timeZone
         return DisplayFrameInput(
             preferences: preferences,
             account: accountObservation,
             localActivity: localActivity,
-            composedAt: Date(),
+            composedAt: now(),
             calendar: calendar,
-            timeZone: .current,
+            timeZone: timeZone,
             preferredLanguages: Locale.preferredLanguages
         )
+    }
+
+    private func requestManualRefresh() {
+        dispatchPrecondition(condition: .onQueue(queue))
+        if transferActive {
+            queuedManualAfterTransfer = true
+            startAccountPoll()
+            refreshLocalActivity(forceScan: true)
+            return
+        }
+        manualRefreshPending = true
+        refreshLocalActivity(forceScan: true)
+        if pollRunning {
+            return
+        }
+        startAccountPoll()
+        if !pollRunning {
+            composeAndMaybeTransfer()
+        }
+    }
+
+    private func composeAndMaybeTransfer() {
+        dispatchPrecondition(condition: .onQueue(queue))
+        guard manualRefreshPending, !transferActive else {
+            return
+        }
+        do {
+            _ = try DisplayCompositionCoordinator.beginInFlight(
+                session: &compositionSession,
+                input: fallbackCompositionInput(preferences: productState.preferences)
+            )
+            startTransferIfNeeded()
+        } catch {
+            return
+        }
+    }
+
+    private func startTransferIfNeeded() {
+        dispatchPrecondition(condition: .onQueue(queue))
+        guard manualRefreshPending, !transferActive else {
+            return
+        }
+        guard let frame = compositionSession.inFlightFrame,
+              bleLink == .ready,
+              let session = readySession else {
+            return
+        }
+        transferActive = link.transferDisplayFrame(
+            blackPlane: frame.blackPlane,
+            redPlane: frame.redPlane,
+            sessionGeneration: session.generation
+        )
+    }
+
+    private func persistRefreshSuccess(_ candidate: ProductState) {
+        do {
+            try store.save(candidate)
+            productState = candidate
+            storageClassification = nil
+            isPersistenceWritable = true
+        } catch PersistenceError.readOnlyUnsupportedSchema {
+            applyLoad(store.load())
+            isPersistenceWritable = false
+            storageClassification = .stateVersionUnsupported
+            panelTrust = .invalid
+        } catch {
+            applyLoad(store.load())
+            storageClassification = .stateWriteFailed
+            panelTrust = .invalid
+        }
     }
 
     private func startAccountPoll() {
@@ -529,6 +636,9 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         case .failure(let failure):
             applyAccountFailure(failure)
             pollRunning = false
+            if manualRefreshPending && !transferActive {
+                composeAndMaybeTransfer()
+            }
             publish()
         case .success(let binary):
             codex.poll(binary.path, appVersion) { [weak self] result in
@@ -543,6 +653,9 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
                         self.applyAccountFailure(failure)
                     }
                     self.pollRunning = false
+                    if self.manualRefreshPending && !self.transferActive {
+                        self.composeAndMaybeTransfer()
+                    }
                     self.publish()
                 }
             }

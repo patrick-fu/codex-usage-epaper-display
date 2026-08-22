@@ -78,6 +78,18 @@ final class NRF5Radio: NSObject, RadioTransport, CBCentralManagerDelegate, CBPer
         peripheral.readValue(for: cbCharacteristic)
     }
 
+    func maximumWriteValueLength(identifier: UUID, type: RadioWriteType) -> Int {
+        guard let peripheral = storedPeripheral(identifier) else {
+            return 0
+        }
+        let writeType: CBCharacteristicWriteType = type == .withResponse ? .withResponse : .withoutResponse
+        return peripheral.maximumWriteValueLength(for: writeType)
+    }
+
+    func canSendWriteWithoutResponse(identifier: UUID) -> Bool {
+        storedPeripheral(identifier)?.canSendWriteWithoutResponse ?? false
+    }
+
     func write(identifier: UUID, characteristic: UUID, data: Data, type: RadioWriteType) {
         guard let peripheral = storedPeripheral(identifier),
               let cbCharacteristic = characteristics[identifier]?[characteristic] else {
@@ -180,6 +192,10 @@ final class NRF5Radio: NSObject, RadioTransport, CBCentralManagerDelegate, CBPer
             characteristic: uuid,
             value: characteristic.value ?? Data()
         )
+    }
+
+    func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
+        delegate?.radioIsReadyToSendWriteWithoutResponse(identifier: peripheral.identifier)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
