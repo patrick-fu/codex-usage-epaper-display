@@ -284,4 +284,3 @@ final class PersistenceStoreTests: XCTestCase {
         try XCTUnwrap(url.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup)
     }
 }
-
