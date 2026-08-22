@@ -30,6 +30,16 @@
 		EEB8953DDD53614B3D32F04F /* SettingsPanelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D1DFE61DB4661922F0305CD /* SettingsPanelTests.swift */; };
 		F0CF28D3769FBF38B185271C /* UsageInkRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = C209A2AA9C531DDAD5488574 /* UsageInkRuntime.swift */; };
 		F40761805DE892311650C558 /* Presentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19BE67BF02A3F4FA79A35C30 /* Presentation.swift */; };
+		1E963830DEC4432999EC3905 /* BindScanPanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A73FD0FDD1874273AB78DEBD /* BindScanPanelController.swift */; };
+		8C2146C8D8D74B4E88716E4B /* BLETypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74B6B42EAB774D1B9F314119 /* BLETypes.swift */; };
+		E623F1604676458EB8D95C56 /* DisplayLinkControlling.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58C499A68A14419F905811C7 /* DisplayLinkControlling.swift */; };
+		8116ABC28C684D6594D13933 /* NRF5Radio.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98B089EC5D0746D182EBACF9 /* NRF5Radio.swift */; };
+		280155EFB4E8493888AA706D /* RadioTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6668CCAB702F4FE49E85AA65 /* RadioTransport.swift */; };
+		4651550B1997454A9831BB56 /* ReadySessionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C96C79F12CE14DC380893CA8 /* ReadySessionCoordinator.swift */; };
+		D56F0683B2FE4EA2A8305E2F /* BindDisplayRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67183056F40540B493ED3296 /* BindDisplayRuntimeTests.swift */; };
+		C952C7B5A28541B183CE8ECF /* BindScanPanelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 415A674A0C2748C6B3F92F94 /* BindScanPanelTests.swift */; };
+		CFF31929BC944A34938997C0 /* FakeRadio.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00EB1ABC7B684FD58346611A /* FakeRadio.swift */; };
+		2550FB587A984445A5A5EBD5 /* ReadySessionCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10B3D5617C4432C80CF7109 /* ReadySessionCoordinatorTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -69,13 +79,34 @@
 		F975DEE9DA0FF6A3EE9D7F03 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/InfoPlist.strings"; sourceTree = "<group>"; };
 		FAF9444C4CE469CFCCFE3BFE /* DisplayPreferencesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayPreferencesTests.swift; sourceTree = "<group>"; };
 		FFA8674546B395F2A785E5DC /* UsageInkTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = UsageInkTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A73FD0FDD1874273AB78DEBD /* BindScanPanelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BindScanPanelController.swift; sourceTree = "<group>"; };
+		74B6B42EAB774D1B9F314119 /* BLETypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLETypes.swift; sourceTree = "<group>"; };
+		58C499A68A14419F905811C7 /* DisplayLinkControlling.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayLinkControlling.swift; sourceTree = "<group>"; };
+		98B089EC5D0746D182EBACF9 /* NRF5Radio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NRF5Radio.swift; sourceTree = "<group>"; };
+		6668CCAB702F4FE49E85AA65 /* RadioTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RadioTransport.swift; sourceTree = "<group>"; };
+		C96C79F12CE14DC380893CA8 /* ReadySessionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadySessionCoordinator.swift; sourceTree = "<group>"; };
+		67183056F40540B493ED3296 /* BindDisplayRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BindDisplayRuntimeTests.swift; sourceTree = "<group>"; };
+		415A674A0C2748C6B3F92F94 /* BindScanPanelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BindScanPanelTests.swift; sourceTree = "<group>"; };
+		00EB1ABC7B684FD58346611A /* FakeRadio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeRadio.swift; sourceTree = "<group>"; };
+		E10B3D5617C4432C80CF7109 /* ReadySessionCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadySessionCoordinatorTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
+		654A71BA8C0948AC97110A26 /* BLE */ = {
+			isa = PBXGroup;
+			children = (
+				98B089EC5D0746D182EBACF9 /* NRF5Radio.swift */,
+				6668CCAB702F4FE49E85AA65 /* RadioTransport.swift */,
+				C96C79F12CE14DC380893CA8 /* ReadySessionCoordinator.swift */,
+			);
+			path = BLE;
+			sourceTree = "<group>";
+		};
 		0D873B5A25C4A7AEFDD61DF8 /* App */ = {
 			isa = PBXGroup;
 			children = (
 				72287E467240B5855B1C1493 /* AppDelegate.swift */,
+				A73FD0FDD1874273AB78DEBD /* BindScanPanelController.swift */,
 				46C1A7DBE00B682F7AB2820B /* ConfirmationPrompting.swift */,
 				7A148838D57F0CD0B704904B /* MenuBuilder.swift */,
 				E9CCF1CC0B334F359EDB24F8 /* SettingsPanelController.swift */,
@@ -87,6 +118,7 @@
 		2C0B2CEAB100969096E14FAC /* Runtime */ = {
 			isa = PBXGroup;
 			children = (
+				58C499A68A14419F905811C7 /* DisplayLinkControlling.swift */,
 				C209A2AA9C531DDAD5488574 /* UsageInkRuntime.swift */,
 			);
 			path = Runtime;
@@ -95,6 +127,10 @@
 		4CBC83B3DCC30296E9AA46DB /* UsageInkTests */ = {
 			isa = PBXGroup;
 			children = (
+				67183056F40540B493ED3296 /* BindDisplayRuntimeTests.swift */,
+				415A674A0C2748C6B3F92F94 /* BindScanPanelTests.swift */,
+				00EB1ABC7B684FD58346611A /* FakeRadio.swift */,
+				E10B3D5617C4432C80CF7109 /* ReadySessionCoordinatorTests.swift */,
 				AF92A5EBBD696710B0C63A48 /* AppLaunchSupport.swift */,
 				FAF9444C4CE469CFCCFE3BFE /* DisplayPreferencesTests.swift */,
 				B9FE754A48CC2BE3CA1854B7 /* InfoPlistContractTests.swift */,
@@ -124,6 +160,7 @@
 			isa = PBXGroup;
 			children = (
 				0D873B5A25C4A7AEFDD61DF8 /* App */,
+				654A71BA8C0948AC97110A26 /* BLE */,
 				6AB4D968CF96E14C4254843B /* Domain */,
 				C3C81158571AF4F6F312B114 /* Persistence */,
 				2C0B2CEAB100969096E14FAC /* Runtime */,
@@ -134,6 +171,7 @@
 		6AB4D968CF96E14C4254843B /* Domain */ = {
 			isa = PBXGroup;
 			children = (
+				74B6B42EAB774D1B9F314119 /* BLETypes.swift */,
 				18CBE4E0E175610D5227CB72 /* DisplayPreferences.swift */,
 				19BE67BF02A3F4FA79A35C30 /* Presentation.swift */,
 				61915DC379E09D27225D9E97 /* ProductState.swift */,
@@ -270,6 +308,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D56F0683B2FE4EA2A8305E2F /* BindDisplayRuntimeTests.swift in Sources */,
+				C952C7B5A28541B183CE8ECF /* BindScanPanelTests.swift in Sources */,
+				CFF31929BC944A34938997C0 /* FakeRadio.swift in Sources */,
+				2550FB587A984445A5A5EBD5 /* ReadySessionCoordinatorTests.swift in Sources */,
 				942ABA8457B287EEBEF01956 /* AppLaunchSupport.swift in Sources */,
 				EDD1FAC9ED97A11BC210B5EE /* DisplayPreferencesTests.swift in Sources */,
 				38E31F455A063A0190565019 /* InfoPlistContractTests.swift in Sources */,
@@ -288,6 +330,12 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1E963830DEC4432999EC3905 /* BindScanPanelController.swift in Sources */,
+				8C2146C8D8D74B4E88716E4B /* BLETypes.swift in Sources */,
+				E623F1604676458EB8D95C56 /* DisplayLinkControlling.swift in Sources */,
+				8116ABC28C684D6594D13933 /* NRF5Radio.swift in Sources */,
+				280155EFB4E8493888AA706D /* RadioTransport.swift in Sources */,
+				4651550B1997454A9831BB56 /* ReadySessionCoordinator.swift in Sources */,
 				2FCB25567CBFA9B18C42B40F /* AppDelegate.swift in Sources */,
 				2EB3B2E0766DE3984CD2C0A6 /* ConfirmationPrompting.swift in Sources */,
 				5A626E76416CB51BC37B65C4 /* DisplayPreferences.swift in Sources */,

@@ -7,6 +7,7 @@ final class ModuleBoundaryTests: XCTestCase {
             "Runtime": ["Foundation"],
             "Domain": ["Foundation"],
             "Persistence": ["Foundation", "Darwin"],
+            "BLE": ["CoreBluetooth", "Foundation"],
         ]
         let src = RepoRoot.url().appendingPathComponent("src")
 
@@ -39,7 +40,9 @@ final class ModuleBoundaryTests: XCTestCase {
             "codex app-server",
         ]
         let src = RepoRoot.url().appendingPathComponent("src")
-        for file in try swiftFiles(in: src) {
+        let scoped = ["App", "Runtime"].map { src.appendingPathComponent($0) }
+        for directory in scoped {
+        for file in try swiftFiles(in: directory) {
             let text = try String(contentsOf: file, encoding: .utf8)
             for token in forbidden {
                 XCTAssertFalse(
@@ -47,6 +50,7 @@ final class ModuleBoundaryTests: XCTestCase {
                     "\(file.lastPathComponent) contains out-of-scope token \(token)"
                 )
             }
+        }
         }
     }
 

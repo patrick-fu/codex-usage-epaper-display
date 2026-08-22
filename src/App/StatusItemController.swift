@@ -5,14 +5,24 @@ final class StatusItemController: NSObject {
     private let statusItem: NSStatusItem
     private let settings: SettingsPanelController
     private let confirmations: ConfirmationPrompting
-    var submit: (@Sendable (RuntimeCommand) -> Void)?
+    private let bindPanel: BindScanPanelController
+    var submit: (@Sendable (RuntimeCommand) -> Void)? {
+        didSet {
+            bindPanel.submit = submit
+        }
+    }
     private var snapshot: RuntimeSnapshot?
     private var didAutoPresentFirstRun = false
 
-    init(settings: SettingsPanelController, confirmations: ConfirmationPrompting) {
+    init(
+        settings: SettingsPanelController,
+        confirmations: ConfirmationPrompting,
+        bindPanel: BindScanPanelController = BindScanPanelController()
+    ) {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         self.settings = settings
         self.confirmations = confirmations
+        self.bindPanel = bindPanel
         super.init()
         statusItem.button?.image = NSImage(systemSymbolName: "display", accessibilityDescription: "UsageInk")
         statusItem.button?.image?.isTemplate = true
@@ -27,9 +37,14 @@ final class StatusItemController: NSObject {
         settings.isVisible
     }
 
+    var bindScanPanel: BindScanPanelController {
+        bindPanel
+    }
+
     func apply(_ snapshot: RuntimeSnapshot) {
         self.snapshot = snapshot
         settings.apply(snapshot)
+        bindPanel.apply(snapshot)
         rebuildMenu()
         if snapshot.shouldPresentSettingsOnLaunch && !didAutoPresentFirstRun {
             didAutoPresentFirstRun = true
@@ -106,6 +121,7 @@ final class StatusItemController: NSObject {
     }
 
     @objc private func findAndBindDisplay() {
+        bindPanel.show()
         submit?(.findAndBindDisplay)
     }
 
