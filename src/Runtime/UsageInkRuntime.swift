@@ -81,10 +81,11 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
     private var pollDeadline: Date?
     private var sleeping = false
     private var joinedScheduledPoll = false
-    private var freshnessPersistRetryAfter: TimeInterval = 0
+    private var pendingDurableSave = false
 
     private static let pollTimerID = "runtime.poll"
     private static let freshnessTimerID = "runtime.freshness"
+    private static let durableSaveTimerID = "runtime.durableSave"
     private static let freshnessPersistRetry: TimeInterval = 5
 
     init(
@@ -871,14 +872,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             dates.append(Date(timeIntervalSince1970: TimeInterval(success + 20 * 60)))
         }
         guard let next = dates.min() else { return }
-        let remaining = next.timeIntervalSince(timestamp)
-        let after: TimeInterval
-        if remaining <= 0, freshnessPersistRetryAfter > 0 {
-            after = freshnessPersistRetryAfter
-        } else {
-            after = max(0, remaining)
-        }
-        clock.schedule(id: Self.freshnessTimerID, after: after) { [weak self] in
+        clock.schedule(id: Self.freshnessTimerID, after: max(0, next.timeIntervalSince(timestamp))) { [weak self] in
             self?.queue.async {
                 guard let self, !self.sleeping else { return }
                 self.refreshFreshness()
@@ -986,22 +980,54 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
 
     @discardableResult
     private func persistAccount(_ candidate: ProductState) -> Bool {
+        persistState(candidate)
+    }
+
+    @discardableResult
+    private func persistState(_ candidate: ProductState) -> Bool {
+        productState = candidate
+        guard isPersistenceWritable else {
+            pendingDurableSave = false
+            clock.cancel(id: Self.durableSaveTimerID)
+            return false
+        }
         do {
             try store.save(candidate)
-            productState = candidate
+            pendingDurableSave = false
             storageClassification = nil
             isPersistenceWritable = true
-            freshnessPersistRetryAfter = 0
+            clock.cancel(id: Self.durableSaveTimerID)
             return true
         } catch PersistenceError.readOnlyUnsupportedSchema {
-            freshnessPersistRetryAfter = Self.freshnessPersistRetry
+            pendingDurableSave = false
+            clock.cancel(id: Self.durableSaveTimerID)
             notePersistenceFailure(.readOnlyUnsupportedSchema)
             return false
         } catch {
-            freshnessPersistRetryAfter = Self.freshnessPersistRetry
+            pendingDurableSave = true
             notePersistenceFailure(.writeFailed)
+            scheduleDurableSaveRetry()
             return false
         }
+    }
+
+    private func scheduleDurableSaveRetry() {
+        guard pendingDurableSave else {
+            return
+        }
+        clock.schedule(id: Self.durableSaveTimerID, after: Self.freshnessPersistRetry) { [weak self] in
+            self?.queue.async {
+                self?.retryDurableSave()
+            }
+        }
+    }
+
+    private func retryDurableSave() {
+        guard pendingDurableSave else {
+            return
+        }
+        persistState(productState)
+        publish()
     }
 
     private func staleIfNeeded(_ availability: PersistedAvailability, lastSuccess: Int?) -> PersistedAvailability {
@@ -1087,23 +1113,9 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
 
     @discardableResult
     private func persistLocalSourceRecord(_ record: LocalActivitySourceRecord) -> Bool {
-        guard isPersistenceWritable else { return false }
         var candidate = productState
         candidate.localActivity = record
-        do {
-            try store.save(candidate)
-            productState = candidate
-            freshnessPersistRetryAfter = 0
-            return true
-        } catch PersistenceError.readOnlyUnsupportedSchema {
-            freshnessPersistRetryAfter = Self.freshnessPersistRetry
-            notePersistenceFailure(.readOnlyUnsupportedSchema)
-            return false
-        } catch {
-            freshnessPersistRetryAfter = Self.freshnessPersistRetry
-            notePersistenceFailure(.writeFailed)
-            return false
-        }
+        return persistState(candidate)
     }
 
     private func handleHostWillSleep() {

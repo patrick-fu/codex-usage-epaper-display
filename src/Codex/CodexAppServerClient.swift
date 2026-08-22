@@ -36,6 +36,7 @@ final class CodexAppServerClient {
     private let jitter: @Sendable () -> Double
     private let queue: DispatchQueue
     private static let queueKey = DispatchSpecificKey<UInt8>()
+    private let epochLock = NSLock()
     private var currentAttempt: Attempt?
     private var pollEpoch: UInt64 = 0
 
@@ -57,8 +58,11 @@ final class CodexAppServerClient {
         appVersion: String,
         completion: @escaping (Result<CodexUsageSnapshot, CodexFailure>) -> Void
     ) {
+        let epoch = snapshotEpoch()
         queue.async { [self] in
-            let epoch = pollEpoch
+            guard epoch == snapshotEpoch() else {
+                return
+            }
             currentAttempt?.cancel()
             currentAttempt = nil
             let attempt = Attempt(
@@ -77,7 +81,7 @@ final class CodexAppServerClient {
                 }
             }
             currentAttempt = attempt
-            guard epoch == pollEpoch else {
+            guard epoch == snapshotEpoch() else {
                 attempt.cancel()
                 return
             }
@@ -86,16 +90,31 @@ final class CodexAppServerClient {
     }
 
     func cancel() {
-        let work = { [self] in
-            pollEpoch &+= 1
+        bumpEpoch()
+        let abort = { [self] in
             currentAttempt?.cancel()
             currentAttempt = nil
         }
         if DispatchQueue.getSpecific(key: Self.queueKey) != nil {
-            work()
+            abort()
         } else {
-            queue.sync(execute: work)
+            queue.async(execute: abort)
         }
+    }
+
+    private func snapshotEpoch() -> UInt64 {
+        epochLock.lock()
+        defer { epochLock.unlock() }
+        return pollEpoch
+    }
+
+    @discardableResult
+    private func bumpEpoch() -> UInt64 {
+        epochLock.lock()
+        pollEpoch &+= 1
+        let value = pollEpoch
+        epochLock.unlock()
+        return value
     }
 
     private final class Attempt {

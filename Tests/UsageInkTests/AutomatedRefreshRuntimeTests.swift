@@ -203,18 +203,59 @@ final class AutomatedRefreshRuntimeTests: XCTestCase {
         waitUntil { harness.box.snapshot?.account.availability == .stale }
         XCTAssertEqual(loadedState(harness).account.lastSuccessfulObservationAt, original.lastSuccessfulObservationAt)
         XCTAssertEqual(loadedState(harness).account.availability, .fresh)
-        XCTAssertEqual(harness.clock.scheduledDelay(id: "runtime.freshness"), 5)
+        XCTAssertEqual(harness.clock.scheduledDelay(id: "runtime.durableSave"), 5)
         let pollsAtCrossing = controller.starts
         harness.clock.advance(1)
         settle()
         XCTAssertEqual(controller.starts, pollsAtCrossing)
-        XCTAssertEqual(harness.clock.scheduledDelay(id: "runtime.freshness"), 4)
+        XCTAssertEqual(harness.clock.scheduledDelay(id: "runtime.durableSave"), 4)
         XCTAssertEqual(loadedState(harness).account.availability, .fresh)
         harness.clock.advance(4)
         settle()
         XCTAssertEqual(controller.starts, pollsAtCrossing)
         XCTAssertEqual(loadedState(harness).account.lastSuccessfulObservationAt, original.lastSuccessfulObservationAt)
         XCTAssertEqual(controller.maximumConcurrent, 1)
+    }
+
+    func testSuccessfulPollPersistFailureRetriesSameCandidateWithoutRepolling() throws {
+        let controller = AutomatedPollController()
+        let harness = try AutomatedRefreshHarness(controller: controller, accountAge: 5 * 60, localAge: 4 * 60)
+        startAndAssumePanel(harness)
+        let original = loadedState(harness)
+        harness.store.simulatedSaveError = .writeFailed
+        harness.runtime.submit(.refreshNow)
+        waitUntil { controller.starts == 1 }
+        waitUntil { harness.box.snapshot?.account.availability == .fresh }
+        waitUntil { harness.box.snapshot?.localActivity.availability == .fresh }
+        XCTAssertEqual(loadedState(harness).account.lastSuccessfulObservationAt, original.account.lastSuccessfulObservationAt)
+        XCTAssertEqual(loadedState(harness).localActivity.lastSuccessfulObservationAt, original.localActivity.lastSuccessfulObservationAt)
+        XCTAssertEqual(loadedState(harness).account.availability, .fresh)
+        XCTAssertEqual(loadedState(harness).localActivity.availability, .fresh)
+        let pollsAfterSuccess = controller.starts
+        for _ in 0..<3 {
+            harness.clock.advance(5)
+            settle()
+            XCTAssertEqual(controller.starts, pollsAfterSuccess)
+            XCTAssertEqual(harness.box.snapshot?.account.availability, .fresh)
+            XCTAssertEqual(harness.box.snapshot?.localActivity.availability, .fresh)
+            XCTAssertNotEqual(harness.box.snapshot?.account.availability, .stale)
+            XCTAssertEqual(loadedState(harness).account.lastSuccessfulObservationAt, original.account.lastSuccessfulObservationAt)
+            XCTAssertEqual(loadedState(harness).localActivity.lastSuccessfulObservationAt, original.localActivity.lastSuccessfulObservationAt)
+        }
+        harness.store.simulatedSaveError = nil
+        harness.clock.advance(5)
+        waitUntil {
+            self.loadedState(harness).account.lastSuccessfulObservationAt != original.account.lastSuccessfulObservationAt
+        }
+        let persisted = loadedState(harness)
+        XCTAssertEqual(persisted.account.availability, .fresh)
+        XCTAssertEqual(persisted.localActivity.availability, .fresh)
+        XCTAssertNotEqual(persisted.localActivity.lastSuccessfulObservationAt, original.localActivity.lastSuccessfulObservationAt)
+        XCTAssertEqual(controller.starts, pollsAfterSuccess)
+        harness.clock.advance(5)
+        settle()
+        XCTAssertEqual(controller.starts, pollsAfterSuccess)
+        XCTAssertEqual(harness.box.snapshot?.account.availability, .fresh)
     }
 
     func testAccountAndLocalStaleCrossingsStayIndependentWhenBothEnabled() throws {

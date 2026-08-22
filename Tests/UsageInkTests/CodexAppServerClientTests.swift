@@ -390,8 +390,25 @@ final class CodexAppServerClientTests: XCTestCase {
         XCTAssertTrue(second.aborted)
     }
 
+    func testPollThenImmediateCancelNeverStartsSession() {
+        let (client, factory, _, queue) = makeClient()
+        let delivered = expectation(description: "queued-poll-completed")
+        delivered.isInverted = true
+        queue.suspend()
+        client.poll(executable: "/tmp/fake-codex", appVersion: "0.1.0") { _ in
+            delivered.fulfill()
+        }
+        client.cancel()
+        XCTAssertEqual(factory.sessions.count, 0)
+        queue.resume()
+        queue.sync {}
+        XCTAssertEqual(factory.sessions.count, 0)
+        XCTAssertEqual(factory.sessions.filter { !$0.aborted }.count, 0)
+        wait(for: [delivered], timeout: 0.15)
+    }
+
     func testCancelAbortsCurrentSessionAndDoesNotDeliverCompletion() {
-        let (client, factory, _, _) = makeClient()
+        let (client, factory, _, queue) = makeClient()
         let first = ScriptedCodexSession()
         let openedFirst = expectation(description: "opened-first")
         factory.next = {
@@ -407,6 +424,7 @@ final class CodexAppServerClientTests: XCTestCase {
         XCTAssertEqual(factory.sessions.count, 1)
         XCTAssertFalse(first.aborted)
         client.cancel()
+        queue.sync {}
         XCTAssertTrue(first.aborted)
         wait(for: [delivered], timeout: 0.15)
 
@@ -422,6 +440,7 @@ final class CodexAppServerClientTests: XCTestCase {
         XCTAssertFalse(second.aborted)
         XCTAssertEqual(factory.sessions.filter { !$0.aborted }.count, 1)
         client.cancel()
+        queue.sync {}
         XCTAssertTrue(second.aborted)
         XCTAssertEqual(factory.sessions.filter { !$0.aborted }.count, 0)
     }
