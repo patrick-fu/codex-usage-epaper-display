@@ -147,6 +147,48 @@ final class RuntimePersistenceTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), original)
     }
 
+
+    func testWriteFailureDoesNotCommitRAM() throws {
+        let root = try makeRoot()
+        var durable = ProductState.default
+        durable.preferences.title = "DESK"
+        durable.preferences.displayStyle = .quotaFocus
+        try PersistenceStore(root: root).save(durable)
+
+        let failing = PersistenceStore(root: root, simulatedSaveError: .writeFailed)
+        let box = SnapshotBox()
+        let started = expectation(description: "start")
+        let saved = expectation(description: "saved")
+        let runtime = UsageInkRuntime(language: .english, store: failing) { snapshot in
+            let count = box.append(snapshot)
+            if count == 1 {
+                started.fulfill()
+            } else {
+                saved.fulfill()
+            }
+        }
+        runtime.start()
+        wait(for: [started], timeout: 1.0)
+        XCTAssertEqual(box.snapshot?.preferences.title, "DESK")
+
+        var attempted = DisplayPreferences.default
+        attempted.title = "INK BOARD"
+        attempted.displayStyle = .balanced
+        runtime.submit(.savePreferences(attempted))
+        wait(for: [saved], timeout: 1.0)
+        XCTAssertEqual(box.snapshot?.preferences.title, "DESK")
+        XCTAssertEqual(box.snapshot?.displayStyle, .quotaFocus)
+        XCTAssertEqual(box.snapshot?.storageClassification, .stateWriteFailed)
+
+        switch PersistenceStore(root: root).load() {
+        case .loaded(let loaded):
+            XCTAssertEqual(loaded.preferences.title, "DESK")
+            XCTAssertEqual(loaded.preferences.displayStyle, .quotaFocus)
+        default:
+            XCTFail("durable state must remain")
+        }
+    }
+
     private func makeRoot() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("usageink-runtime-\(UUID().uuidString)", isDirectory: true)

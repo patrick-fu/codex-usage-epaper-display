@@ -5,6 +5,7 @@ enum PersistenceError: Error, Equatable, Sendable {
     case readOnlyUnsupportedSchema
     case writeFailed
     case invalidCustomCodexPath
+    case symlinkRejected
 }
 
 enum PersistenceLoadResult: Equatable, Sendable {
@@ -30,10 +31,17 @@ enum PersistenceLoadResult: Equatable, Sendable {
     }
 
     var showsFirstRunDisclosure: Bool {
-        switch self {
-        case .missing, .corrupt:
+        if case .missing = self {
             return true
-        case .loaded, .unsupportedSchema:
+        }
+        return false
+    }
+
+    var shouldPresentSettingsOnLaunch: Bool {
+        switch self {
+        case .missing, .corrupt, .unsupportedSchema:
+            return true
+        case .loaded:
             return false
         }
     }
@@ -67,14 +75,40 @@ enum PersistenceLocation {
         }
     }
 
-    static func resolvedRoot() -> URL {
-        if let overrideRoot {
-            return overrideRoot
+    static func installTestHostIsolationIfNeeded() {
+        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil else {
+            return
         }
+        if overrideRoot != nil {
+            return
+        }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "usageink-testhost-\(ProcessInfo.processInfo.processIdentifier)",
+            isDirectory: true
+        )
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        overrideRoot = url
+    }
+
+    static func productionRoot() -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
                 .appendingPathComponent("Library/Application Support", isDirectory: true)
         return base.appendingPathComponent("com.patrickfu.UsageInk", isDirectory: true)
+    }
+
+    static func resolvedRoot() -> URL {
+        if let overrideRoot {
+            return overrideRoot
+        }
+        if let env = ProcessInfo.processInfo.environment["USAGEINK_STATE_ROOT"], !env.isEmpty {
+            return URL(fileURLWithPath: env, isDirectory: true)
+        }
+        installTestHostIsolationIfNeeded()
+        if let overrideRoot {
+            return overrideRoot
+        }
+        return productionRoot()
     }
 }
 
@@ -89,15 +123,18 @@ struct PersistenceStore: Sendable {
     var root: URL
     var now: @Sendable () -> Date
     var isExecutable: @Sendable (String) -> Bool
+    var simulatedSaveError: PersistenceError?
 
     init(
         root: URL = PersistenceLocation.resolvedRoot(),
         now: @escaping @Sendable () -> Date = { Date() },
-        isExecutable: @escaping @Sendable (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
+        isExecutable: @escaping @Sendable (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) },
+        simulatedSaveError: PersistenceError? = nil
     ) {
         self.root = root
         self.now = now
         self.isExecutable = isExecutable
+        self.simulatedSaveError = simulatedSaveError
     }
 
     var stateURL: URL { root.appendingPathComponent(Self.stateFileName) }
@@ -106,44 +143,48 @@ struct PersistenceStore: Sendable {
 
     func load() -> PersistenceLoadResult {
         expireQuarantineIfNeeded()
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: stateURL.path) else {
-            return .missing(.default)
+        do {
+            guard try pathExists(stateURL) else {
+                return .missing(.default)
+            }
+        } catch PersistenceError.symlinkRejected {
+            return .corrupt(.default)
+        } catch {
+            return quarantineExistingState()
         }
         let data: Data
         do {
-            data = try Data(contentsOf: stateURL)
-        } catch {
-            quarantineExistingState()
+            data = try SecureStateFile.readRegularFile(at: stateURL)
+        } catch PersistenceError.symlinkRejected {
             return .corrupt(.default)
+        } catch {
+            return quarantineExistingState()
         }
         do {
             switch try ProductStateCodec.decode(data) {
             case .unsupportedSchema:
                 return .unsupportedSchema
             case .state(let state):
-                do {
-                    try validateStoredExecutable(state.preferences.customCodexPath)
+                if let path = state.preferences.customCodexPath, !isExecutable(path) {
                     return .loaded(state)
-                } catch {
-                    quarantineExistingState()
-                    return .corrupt(.default)
                 }
+                return .loaded(state)
             }
         } catch {
-            quarantineExistingState()
-            return .corrupt(.default)
+            return quarantineExistingState()
         }
     }
 
     func save(_ state: ProductState) throws {
+        if let simulatedSaveError {
+            throw simulatedSaveError
+        }
         if isExistingFileUnsupportedSchema() {
             throw PersistenceError.readOnlyUnsupportedSchema
         }
-        var prepared: ProductState
+        let prepared: ProductState
         do {
             prepared = try state.preparedForWrite()
-            try validateStoredExecutable(prepared.preferences.customCodexPath)
         } catch PreferenceValidationError.invalidCustomCodexPath {
             throw PersistenceError.invalidCustomCodexPath
         } catch {
@@ -153,6 +194,14 @@ struct PersistenceStore: Sendable {
             try ensureDirectory()
             let data = try ProductStateCodec.encode(prepared)
             try atomicReplace(with: data)
+        } catch PersistenceError.symlinkRejected {
+            throw PersistenceError.writeFailed
+        } catch PersistenceError.writeFailed {
+            throw PersistenceError.writeFailed
+        } catch PersistenceError.readOnlyUnsupportedSchema {
+            throw PersistenceError.readOnlyUnsupportedSchema
+        } catch PersistenceError.invalidCustomCodexPath {
+            throw PersistenceError.invalidCustomCodexPath
         } catch {
             throw PersistenceError.writeFailed
         }
@@ -161,28 +210,16 @@ struct PersistenceStore: Sendable {
     func reset() throws {
         do {
             try ensureDirectory()
-            let fm = FileManager.default
-            for url in [stateURL, quarantineURL, temporaryURL] where fm.fileExists(atPath: url.path) {
-                try fm.removeItem(at: url)
-            }
+            try SecureStateFile.removeRegularFileIfPresent(at: stateURL)
+            try SecureStateFile.removeRegularFileIfPresent(at: quarantineURL)
+            try SecureStateFile.removeRegularFileIfPresent(at: temporaryURL)
         } catch {
             throw PersistenceError.writeFailed
         }
     }
 
-    private func validateStoredExecutable(_ path: String?) throws {
-        guard let path else {
-            return
-        }
-        guard isExecutable(path) else {
-            throw PreferenceValidationError.invalidCustomCodexPath
-        }
-    }
-
     private func isExistingFileUnsupportedSchema() -> Bool {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: stateURL.path),
-              let data = try? Data(contentsOf: stateURL),
+        guard let data = try? SecureStateFile.readRegularFile(at: stateURL),
               let decoded = try? ProductStateCodec.decode(data) else {
             return false
         }
@@ -193,32 +230,27 @@ struct PersistenceStore: Sendable {
     }
 
     private func expireQuarantineIfNeeded() {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: quarantineURL.path) else {
+        guard let modified = try? SecureStateFile.modificationDate(at: quarantineURL) else {
             return
         }
-        let values = try? quarantineURL.resourceValues(forKeys: [.contentModificationDateKey])
-        let modified = values?.contentModificationDate ?? Date.distantPast
         if now().timeIntervalSince(modified) > Self.quarantineLifetime {
-            try? fm.removeItem(at: quarantineURL)
+            try? SecureStateFile.removeRegularFileIfPresent(at: quarantineURL)
         }
     }
 
-    private func quarantineExistingState() {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: stateURL.path) else {
-            return
-        }
-        try? ensureDirectory()
-        if fm.fileExists(atPath: quarantineURL.path) {
-            try? fm.removeItem(at: quarantineURL)
-        }
+    private func quarantineExistingState() -> PersistenceLoadResult {
         do {
-            try fm.moveItem(at: stateURL, to: quarantineURL)
-            try applyFileAttributes(to: quarantineURL)
+            try ensureDirectory()
+            try SecureStateFile.quarantineRegularFile(
+                from: stateURL,
+                to: quarantineURL,
+                mode: mode_t(Self.filePermission)
+            )
+            try excludeFromBackup(quarantineURL)
         } catch {
-            try? fm.removeItem(at: stateURL)
+            return .corrupt(.default)
         }
+        return .corrupt(.default)
     }
 
     private func ensureDirectory() throws {
@@ -236,26 +268,32 @@ struct PersistenceStore: Sendable {
     }
 
     private func atomicReplace(with data: Data) throws {
-        let fm = FileManager.default
-        if fm.fileExists(atPath: temporaryURL.path) {
-            try fm.removeItem(at: temporaryURL)
+        var attributeError: Error?
+        do {
+            try SecureStateFile.writeRegularFile(
+                data,
+                to: temporaryURL,
+                mode: mode_t(Self.filePermission)
+            )
+            do {
+                try excludeFromBackup(temporaryURL)
+            } catch {
+                attributeError = error
+            }
+        } catch {
+            try fsyncDirectory(root)
+            throw PersistenceError.writeFailed
         }
-        try data.write(to: temporaryURL, options: .noFileProtection)
-        try applyFileAttributes(to: temporaryURL)
-        let handle = try FileHandle(forWritingTo: temporaryURL)
-        try handle.synchronize()
-        try handle.close()
-        try posixRename(from: temporaryURL, to: stateURL)
-        try applyFileAttributes(to: stateURL)
+        do {
+            try posixRename(from: temporaryURL, to: stateURL)
+        } catch {
+            try fsyncDirectory(root)
+            throw PersistenceError.writeFailed
+        }
         try fsyncDirectory(root)
-    }
-
-    private func applyFileAttributes(to url: URL) throws {
-        try FileManager.default.setAttributes(
-            [.posixPermissions: Self.filePermission],
-            ofItemAtPath: url.path
-        )
-        try excludeFromBackup(url)
+        if attributeError != nil {
+            throw PersistenceError.writeFailed
+        }
     }
 
     private func excludeFromBackup(_ url: URL) throws {
@@ -284,7 +322,7 @@ struct PersistenceStore: Sendable {
             guard let path else {
                 return -1
             }
-            return open(path, O_RDONLY)
+            return open(path, O_RDONLY | O_DIRECTORY)
         }
         guard fd >= 0 else {
             throw PersistenceError.writeFailed
@@ -293,5 +331,188 @@ struct PersistenceStore: Sendable {
         if Darwin.fsync(fd) != 0 {
             throw PersistenceError.writeFailed
         }
+    }
+
+    private func pathExists(_ url: URL) throws -> Bool {
+        try SecureStateFile.existsRegularOrAbsent(at: url)
+    }
+}
+
+enum SecureStateFile {
+    static func existsRegularOrAbsent(at url: URL) throws -> Bool {
+        try url.withUnsafeFileSystemRepresentation { path in
+            guard let path else {
+                throw PersistenceError.writeFailed
+            }
+            var st = stat()
+            if lstat(path, &st) != 0 {
+                if errno == ENOENT {
+                    return false
+                }
+                throw PersistenceError.writeFailed
+            }
+            let type = st.st_mode & S_IFMT
+            if type == S_IFLNK {
+                throw PersistenceError.symlinkRejected
+            }
+            return true
+        }
+    }
+
+    static func modificationDate(at url: URL) throws -> Date? {
+        try url.withUnsafeFileSystemRepresentation { path in
+            guard let path else {
+                return nil
+            }
+            var st = stat()
+            if lstat(path, &st) != 0 {
+                return nil
+            }
+            if (st.st_mode & S_IFMT) == S_IFLNK {
+                return nil
+            }
+            return Date(timeIntervalSince1970: TimeInterval(st.st_mtimespec.tv_sec))
+        }
+    }
+
+    static func readRegularFile(at url: URL) throws -> Data {
+        try url.withUnsafeFileSystemRepresentation { path in
+            guard let path else {
+                throw PersistenceError.writeFailed
+            }
+            var linkStat = stat()
+            if lstat(path, &linkStat) != 0 {
+                throw PersistenceError.writeFailed
+            }
+            if (linkStat.st_mode & S_IFMT) == S_IFLNK {
+                throw PersistenceError.symlinkRejected
+            }
+            let fd = open(path, O_RDONLY | O_NOFOLLOW)
+            guard fd >= 0 else {
+                throw PersistenceError.writeFailed
+            }
+            defer { close(fd) }
+            var st = stat()
+            guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG else {
+                throw PersistenceError.writeFailed
+            }
+            let size = Int(st.st_size)
+            var data = Data(count: size)
+            if size == 0 {
+                return data
+            }
+            try data.withUnsafeMutableBytes { buffer in
+                var offset = 0
+                while offset < size {
+                    let n = Darwin.read(fd, buffer.baseAddress!.advanced(by: offset), size - offset)
+                    if n <= 0 {
+                        throw PersistenceError.writeFailed
+                    }
+                    offset += n
+                }
+            }
+            return data
+        }
+    }
+
+    static func writeRegularFile(_ data: Data, to url: URL, mode: mode_t) throws {
+        try removeRegularFileIfPresent(at: url)
+        try url.withUnsafeFileSystemRepresentation { path in
+            guard let path else {
+                throw PersistenceError.writeFailed
+            }
+            let fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, mode)
+            guard fd >= 0 else {
+                throw PersistenceError.writeFailed
+            }
+            defer { close(fd) }
+            var st = stat()
+            guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG else {
+                throw PersistenceError.writeFailed
+            }
+            try data.withUnsafeBytes { buffer in
+                var offset = 0
+                let total = data.count
+                while offset < total {
+                    let n = Darwin.write(fd, buffer.baseAddress!.advanced(by: offset), total - offset)
+                    if n <= 0 {
+                        throw PersistenceError.writeFailed
+                    }
+                    offset += n
+                }
+            }
+            if fchmod(fd, mode) != 0 {
+                throw PersistenceError.writeFailed
+            }
+            if Darwin.fsync(fd) != 0 {
+                throw PersistenceError.writeFailed
+            }
+        }
+    }
+
+    static func removeRegularFileIfPresent(at url: URL) throws {
+        try url.withUnsafeFileSystemRepresentation { path in
+            guard let path else {
+                throw PersistenceError.writeFailed
+            }
+            var st = stat()
+            if lstat(path, &st) != 0 {
+                if errno == ENOENT {
+                    return
+                }
+                throw PersistenceError.writeFailed
+            }
+            if (st.st_mode & S_IFMT) == S_IFLNK {
+                throw PersistenceError.symlinkRejected
+            }
+            if unlink(path) != 0, errno != ENOENT {
+                throw PersistenceError.writeFailed
+            }
+        }
+    }
+
+    static func quarantineRegularFile(from source: URL, to destination: URL, mode: mode_t) throws {
+        let data: Data
+        do {
+            data = try readRegularFile(at: source)
+        } catch PersistenceError.symlinkRejected {
+            throw PersistenceError.symlinkRejected
+        }
+        let temp = destination.appendingPathExtension("tmp")
+        try writeRegularFile(data, to: temp, mode: mode)
+        let renamed = temp.withUnsafeFileSystemRepresentation { fromPath in
+            destination.withUnsafeFileSystemRepresentation { toPath in
+                guard let fromPath, let toPath else {
+                    return Int32(-1)
+                }
+                return rename(fromPath, toPath)
+            }
+        }
+        if renamed != 0 {
+            try? removeRegularFileIfPresent(at: temp)
+            throw PersistenceError.writeFailed
+        }
+        var destStat = stat()
+        let chmodOK = destination.withUnsafeFileSystemRepresentation { path -> Bool in
+            guard let path else {
+                return false
+            }
+            if lstat(path, &destStat) != 0 {
+                return false
+            }
+            if (destStat.st_mode & S_IFMT) == S_IFLNK {
+                return false
+            }
+            let fd = open(path, O_RDONLY | O_NOFOLLOW)
+            guard fd >= 0 else {
+                return false
+            }
+            defer { close(fd) }
+            return fchmod(fd, mode) == 0
+        }
+        if !chmodOK {
+            throw PersistenceError.writeFailed
+        }
+        try removeRegularFileIfPresent(at: source)
     }
 }

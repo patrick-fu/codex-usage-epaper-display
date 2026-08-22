@@ -150,33 +150,117 @@ final class PersistenceStoreTests: XCTestCase {
         }
     }
 
-    func testSaveRejectsNonExecutableCustomCodexPathAndLoadQuarantinesIt() throws {
+    func testRelativeCustomCodexPathIsRejectedOnSave() throws {
         let root = try makeRoot()
-        let file = root.appendingPathComponent("not-exec")
-        try Data("x".utf8).write(to: file)
         var state = ProductState.default
-        state.preferences.customCodexPath = file.path
+        state.preferences.customCodexPath = "usr/bin/true"
         XCTAssertThrowsError(try PersistenceStore(root: root).save(state)) { error in
             XCTAssertEqual(error as? PersistenceError, .invalidCustomCodexPath)
         }
+    }
 
+    func testTemporarilyUnexecutableCustomCodexPathDoesNotQuarantineState() throws {
+        let root = try makeRoot()
         let executable = root.appendingPathComponent("codex")
         try Data("#!/bin/sh\n".utf8).write(to: executable)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+
+        var state = ProductState.default
+        state.preferences.title = "KEEP ME"
+        state.preferences.displayStyle = .balanced
+        state.boundDisplay = BoundDisplayRecord(identifier: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE", displayName: "Desk")
         state.preferences.customCodexPath = executable.path
         try PersistenceStore(root: root).save(state)
-        if case .loaded(let loaded) = PersistenceStore(root: root).load() {
-            XCTAssertEqual(loaded.preferences.customCodexPath, executable.path)
-        } else {
-            XCTFail("executable path should load")
-        }
 
         try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: executable.path)
-        if case .corrupt = PersistenceStore(root: root).load() {
-            XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("state.json.quarantine").path))
-        } else {
-            XCTFail("non-executable stored path should quarantine")
+        switch PersistenceStore(root: root).load() {
+        case .loaded(let loaded):
+            XCTAssertEqual(loaded.preferences.title, "KEEP ME")
+            XCTAssertEqual(loaded.preferences.displayStyle, .balanced)
+            XCTAssertEqual(loaded.boundDisplay?.identifier, "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")
+            XCTAssertEqual(loaded.preferences.customCodexPath, executable.path)
+        default:
+            XCTFail("chmod must not quarantine a valid state document")
         }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("state.json.quarantine").path))
+
+        try FileManager.default.removeItem(at: executable)
+        switch PersistenceStore(root: root).load() {
+        case .loaded(let loaded):
+            XCTAssertEqual(loaded.preferences.title, "KEEP ME")
+            XCTAssertEqual(loaded.boundDisplay?.displayName, "Desk")
+            XCTAssertEqual(loaded.preferences.customCodexPath, executable.path)
+        default:
+            XCTFail("moved binary must not quarantine a valid state document")
+        }
+
+        let unmounted = PersistenceStore(root: root, isExecutable: { _ in false })
+        switch unmounted.load() {
+        case .loaded(let loaded):
+            XCTAssertEqual(loaded.preferences.title, "KEEP ME")
+            XCTAssertEqual(loaded.preferences.customCodexPath, executable.path)
+        default:
+            XCTFail("unmounted binary must not quarantine a valid state document")
+        }
+    }
+
+    func testInvalidEnumsAndValuesAreCorruptWithoutFollowingSymlinks() throws {
+        let root = try makeRoot()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let valid = try ProductStateCodec.encode(.default)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: valid) as? [String: Any])
+        var preferences = try XCTUnwrap(json["preferences"] as? [String: Any])
+        preferences["displayStyle"] = "not-a-style"
+        json["preferences"] = preferences
+        let payload = root.appendingPathComponent("payload.json")
+        try JSONSerialization.data(withJSONObject: json).write(to: payload)
+        try JSONSerialization.data(withJSONObject: json).write(to: root.appendingPathComponent("state.json"))
+        if case .corrupt = PersistenceStore(root: root).load() {
+            XCTAssertTrue(true)
+        } else {
+            XCTFail("invalid enum must be corrupt")
+        }
+
+        let stateURL = root.appendingPathComponent("state.json")
+        if FileManager.default.fileExists(atPath: stateURL.path) {
+            try FileManager.default.removeItem(at: stateURL)
+        }
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent("state.json"),
+            withDestinationURL: payload
+        )
+        let original = try String(contentsOf: payload, encoding: .utf8)
+        if case .corrupt = PersistenceStore(root: root).load() {
+            XCTAssertEqual(try String(contentsOf: payload, encoding: .utf8), original)
+        } else {
+            XCTFail("symlink state.json must fail closed")
+        }
+    }
+
+    func testInvalidNumericPreferenceValuesAreCorrupt() throws {
+        let root = try makeRoot()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let valid = try ProductStateCodec.encode(.default)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: valid) as? [String: Any])
+        var preferences = try XCTUnwrap(json["preferences"] as? [String: Any])
+        preferences["tpsWindowMinutes"] = 30
+        preferences["redThreshold"] = 81
+        json["preferences"] = preferences
+        try JSONSerialization.data(withJSONObject: json).write(to: root.appendingPathComponent("state.json"))
+        if case .corrupt = PersistenceStore(root: root).load() {
+            XCTAssertTrue(true)
+        } else {
+            XCTFail("invalid numeric preference must be corrupt")
+        }
+    }
+
+    func testResolvedRootDoesNotUseProductionApplicationSupportUnderXCTest() {
+        PersistenceLocation.installTestHostIsolationIfNeeded()
+        let resolved = PersistenceLocation.resolvedRoot().resolvingSymlinksInPath()
+        let production = PersistenceLocation.productionRoot().resolvingSymlinksInPath()
+        XCTAssertNotEqual(resolved, production)
+        XCTAssertFalse(resolved.path.hasPrefix(production.path + "/"))
+        XCTAssertNotNil(ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"])
     }
 
     func testMissingStateIsFirstRunDefaults() throws {

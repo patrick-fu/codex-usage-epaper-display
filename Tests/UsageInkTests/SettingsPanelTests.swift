@@ -11,7 +11,14 @@ final class SettingsPanelTests: XCTestCase {
         controller.openSettings()
 
         XCTAssertTrue(controller.isSettingsVisible)
-        XCTAssertEqual(delegate.settingsPanelController.panelCount, 1)
+        XCTAssertNotEqual(
+            try XCTUnwrap(delegate.runtime).persistenceRoot.resolvingSymlinksInPath(),
+            PersistenceLocation.productionRoot().resolvingSymlinksInPath()
+        )
+        XCTAssertEqual(
+            delegate.settingsPanelController.panelCount,
+            NSApp.windows.filter { $0.identifier == SettingsPanelController.windowIdentifier }.count
+        )
         let settingsWindows = NSApp.windows.filter { window in
             window.identifier == SettingsPanelController.windowIdentifier && window.isVisible
         }
@@ -57,7 +64,7 @@ final class SettingsPanelTests: XCTestCase {
         XCTAssertTrue(panel.disclosureText.contains("遥测"))
         XCTAssertTrue(panel.disclosureText.contains("时间机器"))
         XCTAssertTrue(panel.disclosureText.contains("OpenAI"))
-        XCTAssertEqual(panel.panelCount, 1)
+        XCTAssertTrue(NSApp.windows.contains { $0 === panel.hostedPanel })
 
         snapshot.showsFirstRunDisclosure = false
         panel.apply(snapshot)
@@ -80,7 +87,6 @@ final class SettingsPanelTests: XCTestCase {
         panel.apply(snapshot)
         let style = panel.view(withIdentifier: "settings.displayStyle") as? NSPopUpButton
         style?.selectItem(at: 0)
-        style?.performClick(nil)
         let title = panel.view(withIdentifier: "settings.title") as? NSTextField
         title?.stringValue = "CODEX DESK"
         (panel.view(withIdentifier: "settings.save") as? NSButton)?.performClick(nil)
@@ -89,6 +95,73 @@ final class SettingsPanelTests: XCTestCase {
         }
         XCTAssertEqual(preferences.displayStyle, .balanced)
         XCTAssertEqual(try preferences.validated().title, "CODEX DESK")
+    }
+
+    func testCorruptAndUnsupportedSnapshotsShowBilingualResetGuidance() {
+        let panel = SettingsPanelController()
+        let corrupt = RuntimeSnapshot(
+            statusSummary: "—",
+            binding: .unbound,
+            displayStyle: .quotaFocus,
+            hasReadyWakeupConfiguration: false,
+            showsFirstRunDisclosure: false,
+            shouldPresentSettingsOnLaunch: true,
+            storageClassification: .stateCorrupt,
+            isPersistenceWritable: true
+        )
+        panel.apply(corrupt)
+        XCTAssertTrue(panel.isStorageStatusVisible)
+        XCTAssertTrue(panel.storageStatusText.contains("Reset UsageInk Data"))
+        XCTAssertTrue(panel.storageStatusText.contains("重置 UsageInk 数据"))
+        XCTAssertFalse(panel.isDisclosureVisible)
+        XCTAssertTrue((panel.view(withIdentifier: "settings.save") as? NSButton)?.isEnabled ?? false)
+
+        var unsupported = corrupt
+        unsupported.storageClassification = .stateVersionUnsupported
+        unsupported.isPersistenceWritable = false
+        panel.apply(unsupported)
+        XCTAssertTrue(panel.isStorageStatusVisible)
+        XCTAssertTrue(panel.storageStatusText.contains("read-only"))
+        XCTAssertTrue(panel.storageStatusText.contains("只读"))
+        XCTAssertTrue(panel.storageStatusText.contains("Reset UsageInk Data"))
+        XCTAssertTrue(panel.storageStatusText.contains("不会覆盖"))
+        XCTAssertFalse((panel.view(withIdentifier: "settings.save") as? NSButton)?.isEnabled ?? true)
+        XCTAssertTrue(NSApp.windows.contains { $0 === panel.hostedPanel })
+        XCTAssertEqual(
+            panel.panelCount,
+            NSApp.windows.filter { $0.identifier == SettingsPanelController.windowIdentifier }.count
+        )
+    }
+
+    func testDirtyDraftSurvivesMenuStyleSnapshotAndInvalidSaveShowsBilingualError() {
+        let panel = SettingsPanelController()
+        let snapshot = RuntimeSnapshot(
+            statusSummary: "—",
+            binding: .unbound,
+            displayStyle: .quotaFocus,
+            hasReadyWakeupConfiguration: false,
+            showsFirstRunDisclosure: true
+        )
+        panel.apply(snapshot)
+        let title = panel.view(withIdentifier: "settings.title") as? NSTextField
+        title?.stringValue = "DIRTY TITLE"
+        _ = title?.sendAction(title?.action, to: title?.target)
+
+        var styleSnapshot = snapshot
+        styleSnapshot.showsFirstRunDisclosure = false
+        styleSnapshot.preferences.displayStyle = .balanced
+        styleSnapshot.displayStyle = .balanced
+        panel.apply(styleSnapshot)
+        XCTAssertEqual(panel.currentDraftTitle, "DIRTY TITLE")
+        XCTAssertEqual((panel.view(withIdentifier: "settings.displayStyle") as? NSPopUpButton)?.indexOfSelectedItem, 0)
+
+        let threshold = panel.view(withIdentifier: "settings.redThreshold") as? NSTextField
+        threshold?.stringValue = "81"
+        _ = threshold?.sendAction(threshold?.action, to: threshold?.target)
+        (panel.view(withIdentifier: "settings.save") as? NSButton)?.performClick(nil)
+        XCTAssertTrue(panel.isValidationErrorVisible)
+        XCTAssertTrue(panel.validationErrorText.contains("could not be saved"))
+        XCTAssertTrue(panel.validationErrorText.contains("无法保存"))
     }
 }
 

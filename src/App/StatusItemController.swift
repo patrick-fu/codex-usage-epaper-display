@@ -31,7 +31,7 @@ final class StatusItemController: NSObject {
         self.snapshot = snapshot
         settings.apply(snapshot)
         rebuildMenu()
-        if snapshot.showsFirstRunDisclosure && !didAutoPresentFirstRun {
+        if snapshot.shouldPresentSettingsOnLaunch && !didAutoPresentFirstRun {
             didAutoPresentFirstRun = true
             settings.show()
         }

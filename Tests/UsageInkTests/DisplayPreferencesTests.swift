@@ -32,6 +32,9 @@ final class DisplayPreferencesTests: XCTestCase {
         preferences.title = String(repeating: "你", count: 25)
         XCTAssertEqual(try preferences.validated().title, String(repeating: "你", count: 24))
         XCTAssertEqual(try preferences.validated().title.count, 24)
+
+        preferences.title = "A\u{2028}B\u{2029}C"
+        XCTAssertEqual(try preferences.validated().title, "ABC")
     }
 
     func testValidatedRejectsDisallowedTPSWindowsAndThresholds() {

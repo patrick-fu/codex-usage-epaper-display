@@ -25,10 +25,14 @@ final class SettingsPanelController: NSObject {
         "settings.save",
     ]
     static let disclosureIdentifier = "settings.disclosure"
+    static let storageStatusIdentifier = "settings.storageStatus"
+    static let validationErrorIdentifier = "settings.validationError"
 
     private let panel: NSPanel
     private let disclosureView: NSTextView
     private let disclosureScroll: NSScrollView
+    private let storageStatusField: NSTextField
+    private let validationErrorField: NSTextField
     private let displayStyleButton: NSPopUpButton
     private let quotaOrderButton: NSPopUpButton
     private let tpsWindowButton: NSPopUpButton
@@ -43,6 +47,8 @@ final class SettingsPanelController: NSObject {
     private var moduleBoxes: [String: NSButton] = [:]
     private var draft = DisplayPreferences.default
     private var isWritable = true
+    private var isDraftDirty = false
+    private var pendingSave: DisplayPreferences?
     var submit: ((RuntimeCommand) -> Void)?
 
     override init() {
@@ -76,6 +82,17 @@ final class SettingsPanelController: NSObject {
         disclosureScroll.documentView = disclosureView
         disclosureScroll.identifier = NSUserInterfaceItemIdentifier(Self.disclosureIdentifier)
         disclosureScroll.heightAnchor.constraint(equalToConstant: 160).isActive = true
+
+        storageStatusField = NSTextField(wrappingLabelWithString: "")
+        storageStatusField.identifier = NSUserInterfaceItemIdentifier(Self.storageStatusIdentifier)
+        storageStatusField.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
+        storageStatusField.isHidden = true
+
+        validationErrorField = NSTextField(wrappingLabelWithString: "")
+        validationErrorField.identifier = NSUserInterfaceItemIdentifier(Self.validationErrorIdentifier)
+        validationErrorField.textColor = .systemRed
+        validationErrorField.font = NSFont.systemFont(ofSize: 11)
+        validationErrorField.isHidden = true
 
         displayStyleButton = Self.popUp(
             identifier: "settings.displayStyle",
@@ -170,6 +187,7 @@ final class SettingsPanelController: NSObject {
         form.orientation = .vertical
         form.alignment = .leading
         form.spacing = 8
+        form.addArrangedSubview(storageStatusField)
         form.addArrangedSubview(disclosureScroll)
         form.addArrangedSubview(Self.labeled("Display style", displayStyleButton))
         form.addArrangedSubview(Self.labeled("Modules", moduleStack))
@@ -181,6 +199,7 @@ final class SettingsPanelController: NSObject {
         form.addArrangedSubview(Self.labeled("Red threshold", thresholdRow))
         form.addArrangedSubview(Self.labeled("Language", languageButton))
         form.addArrangedSubview(Self.labeled("Custom Codex path", pathField))
+        form.addArrangedSubview(validationErrorField)
         form.addArrangedSubview(saveButton)
 
         let scroll = NSScrollView()
@@ -207,8 +226,14 @@ final class SettingsPanelController: NSObject {
         panel.isVisible
     }
 
+    var hostedPanel: NSPanel {
+        panel
+    }
+
     var panelCount: Int {
-        1
+        NSApp.windows.filter { window in
+            window.identifier == Self.windowIdentifier
+        }.count
     }
 
     var isDisclosureVisible: Bool {
@@ -217,6 +242,27 @@ final class SettingsPanelController: NSObject {
 
     var disclosureText: String {
         disclosureView.string
+    }
+
+    var storageStatusText: String {
+        storageStatusField.stringValue
+    }
+
+    var isStorageStatusVisible: Bool {
+        !storageStatusField.isHidden
+    }
+
+    var validationErrorText: String {
+        validationErrorField.stringValue
+    }
+
+    var isValidationErrorVisible: Bool {
+        !validationErrorField.isHidden
+    }
+
+    var currentDraftTitle: String {
+        collectDraft()
+        return draft.title
     }
 
     func view(withIdentifier identifier: String) -> NSView? {
@@ -239,6 +285,29 @@ final class SettingsPanelController: NSObject {
 
     func apply(_ snapshot: RuntimeSnapshot) {
         isWritable = snapshot.isPersistenceWritable
+        updateStorageStatus(snapshot.storageClassification)
+        disclosureScroll.isHidden = !snapshot.showsFirstRunDisclosure
+        setControlsEnabled(snapshot.isPersistenceWritable)
+
+        if let pending = pendingSave,
+           snapshot.storageClassification != .stateWriteFailed,
+           snapshot.preferences.displayStyle == pending.displayStyle,
+           snapshot.preferences.title == pending.title {
+            pendingSave = nil
+            isDraftDirty = false
+            apply(draft: snapshot.preferences, writable: snapshot.isPersistenceWritable, showDisclosure: snapshot.showsFirstRunDisclosure)
+            return
+        }
+
+        if isDraftDirty {
+            if snapshot.storageClassification == .stateWriteFailed {
+                return
+            }
+            draft.displayStyle = snapshot.preferences.displayStyle
+            displayStyleButton.selectItem(at: DisplayStyle.allCases.firstIndex(of: draft.displayStyle) ?? 1)
+            return
+        }
+
         apply(
             draft: snapshot.preferences,
             writable: snapshot.isPersistenceWritable,
@@ -278,6 +347,10 @@ final class SettingsPanelController: NSObject {
         moduleBoxes["tps"]?.state = draft.modules.tps ? .on : .off
         moduleBoxes["updated"]?.state = draft.modules.updated ? .on : .off
         moduleBoxes["status"]?.state = draft.modules.status ? .on : .off
+        setControlsEnabled(writable)
+    }
+
+    private func setControlsEnabled(_ writable: Bool) {
         let controls: [NSControl] = [
             displayStyleButton, quotaOrderButton, tpsWindowButton, dateFormatButton,
             redAccentButton, languageButton, titleField, pathField, thresholdField,
@@ -288,8 +361,20 @@ final class SettingsPanelController: NSObject {
         }
     }
 
+    private func updateStorageStatus(_ classification: StorageClassification?) {
+        if let classification, let text = StorageStatusCopy.bilingual(for: classification) {
+            storageStatusField.stringValue = text
+            storageStatusField.isHidden = false
+        } else {
+            storageStatusField.stringValue = ""
+            storageStatusField.isHidden = true
+        }
+    }
+
     @objc private func controlChanged() {
         collectDraft()
+        isDraftDirty = true
+        validationErrorField.isHidden = true
     }
 
     @objc private func stepperChanged() {
@@ -299,14 +384,23 @@ final class SettingsPanelController: NSObject {
         thresholdStepper.integerValue = value
         thresholdField.stringValue = String(value)
         collectDraft()
+        isDraftDirty = true
     }
 
     @objc private func save() {
         collectDraft()
-        guard isWritable, let preferences = try? draft.validated() else {
+        guard isWritable else {
             return
         }
-        submit?(.savePreferences(preferences))
+        do {
+            let preferences = try draft.validated()
+            validationErrorField.isHidden = true
+            pendingSave = preferences
+            submit?(.savePreferences(preferences))
+        } catch {
+            validationErrorField.stringValue = SettingsValidationCopy.bilingual
+            validationErrorField.isHidden = false
+        }
     }
 
     private func collectDraft() {

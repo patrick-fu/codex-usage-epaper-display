@@ -18,6 +18,7 @@ struct RuntimeSnapshot: Sendable, Equatable {
     var preferences: DisplayPreferences = .default
     var panelTrust: PanelTrust = .invalid
     var showsFirstRunDisclosure: Bool = false
+    var shouldPresentSettingsOnLaunch: Bool = false
     var storageClassification: StorageClassification? = nil
     var isPersistenceWritable: Bool = true
 }
@@ -37,8 +38,13 @@ final class UsageInkRuntime: @unchecked Sendable {
     private var displayUnavailable = false
     private var panelTrust: PanelTrust = .invalid
     private var showsFirstRunDisclosure = true
+    private var shouldPresentSettingsOnLaunch = true
     private var storageClassification: StorageClassification?
     private var isPersistenceWritable = true
+
+    var persistenceRoot: URL {
+        store.root
+    }
 
     init(
         language: ResolvedInterfaceLanguage = .resolveSystem(),
@@ -74,12 +80,14 @@ final class UsageInkRuntime: @unchecked Sendable {
             break
         case .setDisplayStyle(let style):
             guard isPersistenceWritable else { return }
-            productState.preferences.displayStyle = style
-            persistProductState()
+            var candidate = productState
+            candidate.preferences.displayStyle = style
+            persistCandidate(candidate)
         case .savePreferences(let preferences):
             guard isPersistenceWritable else { return }
-            productState.preferences = preferences
-            persistProductState()
+            var candidate = productState
+            candidate.preferences = preferences
+            persistCandidate(candidate)
         case .resetUsageInkData:
             do {
                 try store.reset()
@@ -87,6 +95,7 @@ final class UsageInkRuntime: @unchecked Sendable {
                 panelTrust = .invalid
                 hasReadyWakeupConfiguration = false
             } catch {
+                applyLoad(store.load())
                 storageClassification = .stateWriteFailed
             }
         }
@@ -95,6 +104,7 @@ final class UsageInkRuntime: @unchecked Sendable {
     private func applyLoad(_ result: PersistenceLoadResult) {
         productState = result.state
         showsFirstRunDisclosure = result.showsFirstRunDisclosure
+        shouldPresentSettingsOnLaunch = result.shouldPresentSettingsOnLaunch
         storageClassification = result.storageClassification
         isPersistenceWritable = result.isWritable
         binding = .unbound
@@ -102,17 +112,21 @@ final class UsageInkRuntime: @unchecked Sendable {
         panelTrust = .invalid
     }
 
-    private func persistProductState() {
+    private func persistCandidate(_ candidate: ProductState) {
         do {
-            try store.save(productState)
-            applyLoad(store.load())
+            try store.save(candidate)
+            productState = candidate
+            showsFirstRunDisclosure = false
+            shouldPresentSettingsOnLaunch = false
+            storageClassification = nil
+            isPersistenceWritable = true
             panelTrust = .invalid
         } catch PersistenceError.readOnlyUnsupportedSchema {
+            applyLoad(store.load())
             isPersistenceWritable = false
             storageClassification = .stateVersionUnsupported
-        } catch PersistenceError.invalidCustomCodexPath {
-            applyLoad(store.load())
         } catch {
+            applyLoad(store.load())
             storageClassification = .stateWriteFailed
         }
     }
@@ -135,6 +149,7 @@ final class UsageInkRuntime: @unchecked Sendable {
             preferences: productState.preferences,
             panelTrust: panelTrust,
             showsFirstRunDisclosure: showsFirstRunDisclosure,
+            shouldPresentSettingsOnLaunch: shouldPresentSettingsOnLaunch,
             storageClassification: storageClassification,
             isPersistenceWritable: isPersistenceWritable
         )

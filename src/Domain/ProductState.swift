@@ -134,3 +134,39 @@ enum FirstRunDisclosure {
     UsageInk 仅为当前 macOS 用户保留两个本地存储：版本化产品状态（state.json）以及本机假名化的 Codex 活动事实（activity.sqlite）。它只读取 ${CODEX_HOME:-~/.codex}/sessions 与 ${CODEX_HOME:-~/.codex}/archived_sessions，且只接受 token_count 事件。它不读取认证材料，也不发送遥测或上传数据。绑定显示器是物理可见的公开输出。解除绑定、重建本机指标和重置 UsageInk 数据都需要确认，并且不会修改 ~/.codex 或设备固件。备份排除只是应用请求，不是对时间机器或其他备份产品的保证。本机 Codex app-server 可能自行联系 OpenAI。
     """
 }
+
+
+enum StorageStatusCopy {
+    static func bilingual(for classification: StorageClassification) -> String? {
+        switch classification {
+        case .stateCorrupt:
+            return """
+            UsageInk state is corrupt. Choose Reset UsageInk Data from the menu. Clean defaults are loaded and the original file was quarantined.
+
+            UsageInk 状态已损坏。请从菜单选择重置 UsageInk 数据。已加载干净默认项，原始文件已隔离。
+            """
+        case .stateVersionUnsupported:
+            return """
+            This UsageInk data uses a newer unsupported schema and is read-only. Choose Reset UsageInk Data from the menu. UsageInk will not overwrite it.
+
+            当前数据使用更新的不受支持的结构，因此只读。请从菜单选择重置 UsageInk 数据。UsageInk 不会覆盖该文件。
+            """
+        case .stateWriteFailed:
+            return """
+            UsageInk could not save settings. The previously stored state is still shown.
+
+            UsageInk 无法保存设置。仍显示先前已存储的状态。
+            """
+        case .migrationFailed, .unknown:
+            return nil
+        }
+    }
+}
+
+enum SettingsValidationCopy {
+    static let bilingual = """
+    The settings could not be saved. Check the title, threshold, TPS window, and Codex path.
+
+    无法保存设置。请检查标题、阈值、TPS 窗口和 Codex 路径。
+    """
+}

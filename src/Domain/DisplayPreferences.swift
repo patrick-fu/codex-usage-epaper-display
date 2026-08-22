@@ -84,9 +84,7 @@ struct DisplayPreferences: Sendable, Equatable {
     )
 
     static func sanitizedTitle(_ raw: String) -> String {
-        let withoutNewlines = raw
-            .replacingOccurrences(of: "\n", with: "")
-            .replacingOccurrences(of: "\r", with: "")
+        let withoutNewlines = raw.components(separatedBy: .newlines).joined()
         let trimmed = withoutNewlines.trimmingCharacters(in: .whitespaces)
         if trimmed.count <= titleGraphemeLimit {
             return trimmed
