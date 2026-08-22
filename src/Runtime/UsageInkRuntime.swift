@@ -80,9 +80,12 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
     private var pollGeneration: UInt64 = 0
     private var pollDeadline: Date?
     private var sleeping = false
+    private var joinedScheduledPoll = false
+    private var freshnessPersistRetryAfter: TimeInterval = 0
 
     private static let pollTimerID = "runtime.poll"
     private static let freshnessTimerID = "runtime.freshness"
+    private static let freshnessPersistRetry: TimeInterval = 5
 
     init(
         language: ResolvedInterfaceLanguage = .resolveSystem(),
@@ -795,6 +798,8 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         guard generation == pollGeneration else {
             return
         }
+        let missedScheduled = joinedScheduledPoll
+        joinedScheduledPoll = false
         pollRunning = false
         pollTerminal = true
         scheduleFreshnessCheck()
@@ -803,6 +808,20 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
                 ensureRecovery()
             }
             processRefreshRequest()
+        }
+        guard !sleeping else {
+            return
+        }
+        if missedScheduled {
+            if let deadline = pollDeadline, deadline <= now() {
+                automaticRefreshPending = true
+                pollAttempted = false
+                pollTerminal = false
+                startPoll()
+                processRefreshRequest()
+            } else {
+                schedulePollTimer()
+            }
         }
     }
 
@@ -825,7 +844,11 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
                 }
                 self.pollAttempted = false
                 self.pollTerminal = false
-                self.startPoll()
+                if self.pollRunning {
+                    self.joinedScheduledPoll = true
+                } else {
+                    self.startPoll()
+                }
                 self.processRefreshRequest()
                 self.publish()
             }
@@ -848,7 +871,14 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             dates.append(Date(timeIntervalSince1970: TimeInterval(success + 20 * 60)))
         }
         guard let next = dates.min() else { return }
-        clock.schedule(id: Self.freshnessTimerID, after: max(0, next.timeIntervalSince(timestamp))) { [weak self] in
+        let remaining = next.timeIntervalSince(timestamp)
+        let after: TimeInterval
+        if remaining <= 0, freshnessPersistRetryAfter > 0 {
+            after = freshnessPersistRetryAfter
+        } else {
+            after = max(0, remaining)
+        }
+        clock.schedule(id: Self.freshnessTimerID, after: after) { [weak self] in
             self?.queue.async {
                 guard let self, !self.sleeping else { return }
                 self.refreshFreshness()
@@ -954,16 +984,23 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         persistAccount(candidate)
     }
 
-    private func persistAccount(_ candidate: ProductState) {
+    @discardableResult
+    private func persistAccount(_ candidate: ProductState) -> Bool {
         do {
             try store.save(candidate)
             productState = candidate
             storageClassification = nil
             isPersistenceWritable = true
+            freshnessPersistRetryAfter = 0
+            return true
         } catch PersistenceError.readOnlyUnsupportedSchema {
+            freshnessPersistRetryAfter = Self.freshnessPersistRetry
             notePersistenceFailure(.readOnlyUnsupportedSchema)
+            return false
         } catch {
+            freshnessPersistRetryAfter = Self.freshnessPersistRetry
             notePersistenceFailure(.writeFailed)
+            return false
         }
     }
 
@@ -1048,17 +1085,24 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         )
     }
 
-    private func persistLocalSourceRecord(_ record: LocalActivitySourceRecord) {
-        guard isPersistenceWritable else { return }
+    @discardableResult
+    private func persistLocalSourceRecord(_ record: LocalActivitySourceRecord) -> Bool {
+        guard isPersistenceWritable else { return false }
         var candidate = productState
         candidate.localActivity = record
         do {
             try store.save(candidate)
             productState = candidate
+            freshnessPersistRetryAfter = 0
+            return true
         } catch PersistenceError.readOnlyUnsupportedSchema {
+            freshnessPersistRetryAfter = Self.freshnessPersistRetry
             notePersistenceFailure(.readOnlyUnsupportedSchema)
+            return false
         } catch {
+            freshnessPersistRetryAfter = Self.freshnessPersistRetry
             notePersistenceFailure(.writeFailed)
+            return false
         }
     }
 
@@ -1067,10 +1111,11 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         sleeping = true
         clock.cancel(id: Self.pollTimerID)
         clock.cancel(id: Self.freshnessTimerID)
+        codex.cancel()
         pollGeneration &+= 1
         pollRunning = false
         pollTerminal = false
-        codex.cancel()
+        joinedScheduledPoll = false
         if !hasRefreshRequest {
             automaticRefreshPending = persistedBindingIdentifier != nil
         }

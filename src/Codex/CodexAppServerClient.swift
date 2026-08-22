@@ -36,6 +36,8 @@ final class CodexAppServerClient {
     private let jitter: @Sendable () -> Double
     private let queue: DispatchQueue
     private static let queueKey = DispatchSpecificKey<UInt8>()
+    private var currentAttempt: Attempt?
+    private var pollEpoch: UInt64 = 0
 
     init(
         factory: CodexSessionFactory,
@@ -56,7 +58,10 @@ final class CodexAppServerClient {
         completion: @escaping (Result<CodexUsageSnapshot, CodexFailure>) -> Void
     ) {
         queue.async { [self] in
-            Attempt(
+            let epoch = pollEpoch
+            currentAttempt?.cancel()
+            currentAttempt = nil
+            let attempt = Attempt(
                 factory: factory,
                 clock: clock,
                 jitter: jitter,
@@ -64,7 +69,32 @@ final class CodexAppServerClient {
                 executable: executable,
                 appVersion: appVersion,
                 completion: completion
-            ).start(ordinaryRetryRemaining: true)
+            )
+            attempt.onFinished = { [weak self, weak attempt] in
+                guard let self, let attempt else { return }
+                if self.currentAttempt === attempt {
+                    self.currentAttempt = nil
+                }
+            }
+            currentAttempt = attempt
+            guard epoch == pollEpoch else {
+                attempt.cancel()
+                return
+            }
+            attempt.start(ordinaryRetryRemaining: true)
+        }
+    }
+
+    func cancel() {
+        let work = { [self] in
+            pollEpoch &+= 1
+            currentAttempt?.cancel()
+            currentAttempt = nil
+        }
+        if DispatchQueue.getSpecific(key: Self.queueKey) != nil {
+            work()
+        } else {
+            queue.sync(execute: work)
         }
     }
 
@@ -89,6 +119,8 @@ final class CodexAppServerClient {
         private var overloadRetries = 0
         private var pollStartedAt: TimeInterval = 0
         private var ordinaryRetryRemaining = false
+        private var cancelled = false
+        var onFinished: (() -> Void)?
 
         init(
             factory: CodexSessionFactory,
@@ -108,7 +140,23 @@ final class CodexAppServerClient {
             self.completion = completion
         }
 
+        func cancel() {
+            cancelled = true
+            finished = true
+            clock.cancelAll()
+            session?.outputHandler = nil
+            session?.exitHandler = nil
+            session?.abort()
+            session = nil
+            let finishedHook = onFinished
+            onFinished = nil
+            finishedHook?()
+        }
+
         func start(ordinaryRetryRemaining: Bool) {
+            guard !cancelled else {
+                return
+            }
             self.ordinaryRetryRemaining = ordinaryRetryRemaining
             pollStartedAt = clock.now
             do {
@@ -449,6 +497,9 @@ final class CodexAppServerClient {
         }
 
         private func finishOrdinary(_ result: Result<CodexUsageSnapshot, CodexFailure>) {
+            guard !cancelled else {
+                return
+            }
             if case .failure(let failure) = result,
                ordinaryRetryRemaining,
                Self.ordinaryRetryable.contains(failure) {
@@ -466,7 +517,7 @@ final class CodexAppServerClient {
         ]
 
         private func finishCurrent(_ result: Result<CodexUsageSnapshot, CodexFailure>) {
-            guard !finished else {
+            guard !finished, !cancelled else {
                 return
             }
             finished = true
@@ -480,6 +531,9 @@ final class CodexAppServerClient {
             session?.outputHandler = nil
             session?.exitHandler = nil
             session = nil
+            let finishedHook = onFinished
+            onFinished = nil
+            finishedHook?()
             completion(result)
         }
 

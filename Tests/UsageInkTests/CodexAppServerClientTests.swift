@@ -390,6 +390,42 @@ final class CodexAppServerClientTests: XCTestCase {
         XCTAssertTrue(second.aborted)
     }
 
+    func testCancelAbortsCurrentSessionAndDoesNotDeliverCompletion() {
+        let (client, factory, _, _) = makeClient()
+        let first = ScriptedCodexSession()
+        let openedFirst = expectation(description: "opened-first")
+        factory.next = {
+            openedFirst.fulfill()
+            return first
+        }
+        let delivered = expectation(description: "poll-completed")
+        delivered.isInverted = true
+        client.poll(executable: "/tmp/fake-codex", appVersion: "0.1.0") { _ in
+            delivered.fulfill()
+        }
+        wait(for: [openedFirst], timeout: 1.0)
+        XCTAssertEqual(factory.sessions.count, 1)
+        XCTAssertFalse(first.aborted)
+        client.cancel()
+        XCTAssertTrue(first.aborted)
+        wait(for: [delivered], timeout: 0.15)
+
+        let second = ScriptedCodexSession()
+        let openedSecond = expectation(description: "opened-second")
+        factory.next = {
+            openedSecond.fulfill()
+            return second
+        }
+        client.poll(executable: "/tmp/fake-codex", appVersion: "0.1.0") { _ in }
+        wait(for: [openedSecond], timeout: 1.0)
+        XCTAssertTrue(first.aborted)
+        XCTAssertFalse(second.aborted)
+        XCTAssertEqual(factory.sessions.filter { !$0.aborted }.count, 1)
+        client.cancel()
+        XCTAssertTrue(second.aborted)
+        XCTAssertEqual(factory.sessions.filter { !$0.aborted }.count, 0)
+    }
+
     private func makeClient() -> (CodexAppServerClient, ScriptedCodexFactory, ManualCodexClock, DispatchQueue) {
         let queue = DispatchQueue(label: "test.codex.client")
         let factory = ScriptedCodexFactory()

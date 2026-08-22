@@ -40,6 +40,15 @@ final class ManualDisplayClock: DisplayClock, @unchecked Sendable {
         lock.unlock()
     }
 
+    func scheduledDelay(id: String) -> TimeInterval? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let task = tasks[id] else {
+            return nil
+        }
+        return task.fireAt - elapsed
+    }
+
     func advance(_ interval: TimeInterval) {
         lock.lock()
         elapsed += interval
