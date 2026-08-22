@@ -25,6 +25,7 @@ struct RuntimeSnapshot: Sendable, Equatable {
     var bleLink: BLELinkState = .unbound
     var bindCandidates: [BindCandidate] = []
     var lastBLEClassification: BLEClassification? = nil
+    var account: AccountObservation = .unknown
 }
 
 final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
@@ -38,7 +39,6 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
     private var productState: ProductState = .default
     private var binding: BindingPresentation = .unbound
     private var hasReadyWakeupConfiguration = false
-    private var accountAvailability: SourceAvailability = .unknown
     private var localAvailability: SourceAvailability = .unknown
     private var panelTrust: PanelTrust = .invalid
     private var showsFirstRunDisclosure = true
@@ -54,10 +54,15 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         store.root
     }
 
+    private let codex: CodexPollingDependencies
+    private var accountObservation: AccountObservation = .unknown
+    private var pollRunning = false
+
     init(
         language: ResolvedInterfaceLanguage = .resolveSystem(),
         store: PersistenceStore = PersistenceStore(),
         makeLink: ((DispatchQueue) -> DisplayLinkControlling)? = nil,
+        makeCodex: ((DispatchQueue) -> CodexPollingDependencies)? = nil,
         snapshotHandler: @escaping @Sendable (RuntimeSnapshot) -> Void
     ) {
         self.queue = DispatchQueue(label: Self.queueLabel, qos: .userInitiated)
@@ -65,6 +70,13 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         self.store = store
         self.snapshotHandler = snapshotHandler
         self.link = makeLink?(queue) ?? NullDisplayLink()
+        if let makeCodex {
+            self.codex = makeCodex(queue)
+        } else if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            self.codex = .disabled()
+        } else {
+            self.codex = .live(queue: queue)
+        }
         self.link.delegate = self
     }
 
@@ -79,6 +91,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             link.confirmBoundIdentity(persistedBindingIdentifier)
             link.attach()
             publish()
+            startAccountPoll()
         }
     }
 
@@ -177,7 +190,9 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
 
     private func handle(_ command: RuntimeCommand) {
         switch command {
-        case .refreshNow, .rebuildLocalMetrics:
+        case .refreshNow:
+            startAccountPoll()
+        case .rebuildLocalMetrics:
             break
         case .findAndBindDisplay:
             guard persistedBindingIdentifier == nil else { return }
@@ -255,6 +270,19 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             binding = .unbound
             bleLink = .unbound
         }
+        accountObservation = AccountObservation(
+            availability: staleIfNeeded(productState.account.availability, lastSuccess: productState.account.lastSuccessfulObservationAt),
+            failure: productState.account.failure,
+            planType: productState.account.planType,
+            windows: productState.account.windows.map { window in
+                UsageWindowObservation(
+                    slot: UsageWindowSlot(rawValue: window.slot) ?? .primary,
+                    usedPercent: window.usedPercent,
+                    windowDurationMins: window.windowDurationMins,
+                    resetsAt: window.resetsAt
+                )
+            }
+        )
     }
 
     private func persistCandidate(_ candidate: ProductState) {
@@ -294,7 +322,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             || (lastBLEClassification?.showsDisplayUnavailable ?? false)
         return RuntimeSnapshot(
             statusSummary: formatter.summary(
-                account: accountAvailability,
+                account: accountObservation,
                 local: localAvailability,
                 displayUnavailable: displayUnavailable,
                 bleLink: bleLink,
@@ -311,7 +339,113 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             isPersistenceWritable: isPersistenceWritable,
             bleLink: bleLink,
             bindCandidates: bindCandidates,
-            lastBLEClassification: lastBLEClassification
+            lastBLEClassification: lastBLEClassification,
+            account: accountObservation
         )
+    }
+
+    private func startAccountPoll() {
+        dispatchPrecondition(condition: .onQueue(queue))
+        guard codex.isEnabled else {
+            return
+        }
+        if pollRunning {
+            return
+        }
+        pollRunning = true
+        switch codex.resolve(productState.preferences.customCodexPath) {
+        case .failure(let failure):
+            applyAccountFailure(failure)
+            pollRunning = false
+            publish()
+            return
+        case .success(let resolved):
+            let version = codex.appVersion
+            codex.poll(resolved.path, version) { [weak self] result in
+                guard let self else {
+                    return
+                }
+                self.queue.async {
+                    switch result {
+                    case .success(let snapshot):
+                        self.applyAccountSuccess(snapshot)
+                    case .failure(let failure):
+                        self.applyAccountFailure(failure)
+                    }
+                    self.pollRunning = false
+                    self.publish()
+                }
+            }
+        }
+    }
+
+    private func applyAccountSuccess(_ snapshot: CodexUsageSnapshot) {
+        let observedAt = Int(codex.now().timeIntervalSince1970)
+        accountObservation = AccountObservation(
+            availability: .fresh,
+            failure: nil,
+            planType: snapshot.planType,
+            windows: snapshot.windows
+        )
+        var candidate = productState
+        candidate.account.lastSuccessfulObservationAt = observedAt
+        candidate.account.availability = .fresh
+        candidate.account.failure = nil
+        candidate.account.planType = snapshot.planType
+        candidate.account.windows = snapshot.windows.compactMap { window in
+            guard let resetsAt = window.resetsAt else {
+                return nil
+            }
+            return UsageWindowRecord(
+                slot: window.slot.rawValue,
+                usedPercent: window.usedPercent,
+                windowDurationMins: window.windowDurationMins,
+                resetsAt: resetsAt
+            )
+        }
+        persistAccount(candidate)
+    }
+
+    private func applyAccountFailure(_ failure: CodexFailure) {
+        let availability: PersistedAvailability
+        switch failure {
+        case .authRequired:
+            availability = .authRequired
+        default:
+            availability = .unavailable
+        }
+        accountObservation.availability = availability
+        accountObservation.failure = failure.rawValue
+        var candidate = productState
+        candidate.account.availability = availability
+        candidate.account.failure = failure.rawValue
+        persistAccount(candidate)
+    }
+
+    private func persistAccount(_ candidate: ProductState) {
+        do {
+            try store.save(candidate)
+            productState = candidate
+            storageClassification = nil
+            isPersistenceWritable = true
+        } catch PersistenceError.readOnlyUnsupportedSchema {
+            applyLoad(store.load())
+            isPersistenceWritable = false
+            storageClassification = .stateVersionUnsupported
+        } catch {
+            applyLoad(store.load())
+            storageClassification = .stateWriteFailed
+        }
+    }
+
+    private func staleIfNeeded(_ availability: PersistedAvailability, lastSuccess: Int?) -> PersistedAvailability {
+        guard availability == .fresh, let lastSuccess else {
+            return availability
+        }
+        let age = codex.now().timeIntervalSince1970 - TimeInterval(lastSuccess)
+        if age >= 20 * 60 {
+            return .stale
+        }
+        return availability
     }
 }

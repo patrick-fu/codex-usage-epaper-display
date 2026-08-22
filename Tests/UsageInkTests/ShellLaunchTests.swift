@@ -27,7 +27,7 @@ final class ShellLaunchTests: XCTestCase {
         waitForMenu(menu)
 
         let summary = StatusSummaryFormatter(language: .resolveSystem()).summary(
-            account: .unknown,
+            account: SourceAvailability.unknown,
             local: .unknown,
             displayUnavailable: false
         )
