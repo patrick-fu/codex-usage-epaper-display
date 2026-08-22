@@ -7,6 +7,7 @@ enum RuntimeCommand: Sendable, Equatable {
     case unbindDisplay
     case setDisplayStyle(DisplayStyle)
     case savePreferences(DisplayPreferences)
+    case configureWakeupPin(WakeupPinWriteRequest)
     case rebuildLocalMetrics
     case resetUsageInkData
 }
@@ -16,6 +17,7 @@ struct RuntimeSnapshot: Sendable, Equatable {
     var binding: BindingPresentation
     var displayStyle: DisplayStyle
     var hasReadyWakeupConfiguration: Bool
+    var wakeupConfiguration: ReadyWakeupConfiguration? = nil
     var preferences: DisplayPreferences = .default
     var panelTrust: PanelTrust = .invalid
     var showsFirstRunDisclosure: Bool = false
@@ -37,7 +39,8 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
     private let link: DisplayLinkControlling
     private var productState: ProductState = .default
     private var binding: BindingPresentation = .unbound
-    private var hasReadyWakeupConfiguration = false
+    private var readySession: ReadyBLESession?
+    private var wakeupConsent: WakeupPinWriteRequest?
     private var accountAvailability: SourceAvailability = .unknown
     private var localAvailability: SourceAvailability = .unknown
     private var panelTrust: PanelTrust = .invalid
@@ -72,7 +75,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         queue.async { [self] in
             applyLoad(store.load())
             panelTrust = .invalid
-            hasReadyWakeupConfiguration = false
+            clearReadySession()
             lastBLEClassification = nil
             bindCandidates = []
             bluetoothBecameUnavailable = false
@@ -95,7 +98,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         switch availability {
         case .unauthorized, .unavailable:
             bluetoothBecameUnavailable = true
-            hasReadyWakeupConfiguration = false
+            clearReadySession()
             panelTrust = .invalid
         case .poweredOn:
             if bluetoothBecameUnavailable, let identifier = persistedBindingIdentifier {
@@ -112,7 +115,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         dispatchPrecondition(condition: .onQueue(queue))
         bleLink = state
         if state != .ready {
-            hasReadyWakeupConfiguration = false
+            clearReadySession()
             publish()
         }
     }
@@ -126,7 +129,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
     func displayLinkDidClassify(_ classification: BLEClassification) {
         dispatchPrecondition(condition: .onQueue(queue))
         lastBLEClassification = classification
-        hasReadyWakeupConfiguration = false
+        clearReadySession()
         publish()
     }
 
@@ -147,7 +150,8 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             isPersistenceWritable = true
             binding = .bound
             bleLink = .ready
-            hasReadyWakeupConfiguration = true
+            readySession = session
+            wakeupConsent = nil
             lastBLEClassification = nil
             bindCandidates = []
             panelTrust = .invalid
@@ -165,9 +169,31 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         publish()
     }
 
+    func displayLinkDidUpdateReadyConfig(_ config: EPDConfig) {
+        dispatchPrecondition(condition: .onQueue(queue))
+        guard var session = readySession else {
+            return
+        }
+        if session.config.digest != config.digest {
+            wakeupConsent = nil
+        }
+        session.config = config
+        readySession = session
+        publish()
+    }
+
+    func displayLinkDidFinishConfigWrite(succeeded: Bool) {
+        dispatchPrecondition(condition: .onQueue(queue))
+        if wakeupConsent != nil {
+            wakeupConsent = nil
+        }
+        _ = succeeded
+        publish()
+    }
+
     func displayLinkDidDisconnect() {
         dispatchPrecondition(condition: .onQueue(queue))
-        hasReadyWakeupConfiguration = false
+        clearReadySession()
         if binding == .bound, bleLink == .ready {
             bleLink = .disconnected
         }
@@ -187,6 +213,8 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
                 return
             }
             link.bind(identifier: identifier)
+        case .configureWakeupPin(let request):
+            applyWakeupPinWrite(request)
         case .unbindDisplay:
             performUnbind()
         case .setDisplayStyle(let style):
@@ -205,7 +233,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
                 try store.reset()
                 applyLoad(store.load())
                 panelTrust = .invalid
-                hasReadyWakeupConfiguration = false
+                clearReadySession()
             } catch {
                 applyLoad(store.load())
                 storageClassification = .stateWriteFailed
@@ -222,7 +250,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         persistCandidate(candidate)
         binding = .unbound
         bleLink = .unbound
-        hasReadyWakeupConfiguration = false
+        clearReadySession()
         lastBLEClassification = nil
         bindCandidates = []
         panelTrust = .invalid
@@ -232,7 +260,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         link.cancelWork()
         binding = .unbound
         bleLink = .unbound
-        hasReadyWakeupConfiguration = false
+        clearReadySession()
         panelTrust = .invalid
         bluetoothBecameUnavailable = false
         link.confirmBoundIdentity(nil)
@@ -244,7 +272,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         shouldPresentSettingsOnLaunch = result.shouldPresentSettingsOnLaunch
         storageClassification = result.storageClassification
         isPersistenceWritable = result.isWritable
-        hasReadyWakeupConfiguration = false
+        clearReadySession()
         lastBLEClassification = nil
         bindCandidates = []
         panelTrust = .invalid
@@ -254,6 +282,50 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         } else {
             binding = .unbound
             bleLink = .unbound
+        }
+    }
+
+    private var hasReadyWakeupConfiguration: Bool {
+        bleLink == .ready && readySession != nil
+    }
+
+    private var publishedWakeupConfiguration: ReadyWakeupConfiguration? {
+        guard hasReadyWakeupConfiguration, let session = readySession else {
+            return nil
+        }
+        return ReadyWakeupConfiguration(
+            pin: session.config.wakeupPin,
+            sessionGeneration: session.generation,
+            configDigest: session.config.digest
+        )
+    }
+
+    private func clearReadySession() {
+        readySession = nil
+        wakeupConsent = nil
+    }
+
+    private func applyWakeupPinWrite(_ request: WakeupPinWriteRequest) {
+        wakeupConsent = request
+        guard WakeupPin.isAllowed(request.pin) else {
+            wakeupConsent = nil
+            return
+        }
+        guard bleLink == .ready,
+              let session = readySession,
+              session.generation == request.sessionGeneration,
+              session.config.digest == request.configDigest
+        else {
+            wakeupConsent = nil
+            return
+        }
+        let issued = link.writeWakeupPin(
+            request.pin,
+            sessionGeneration: request.sessionGeneration,
+            configDigest: request.configDigest
+        )
+        if !issued {
+            wakeupConsent = nil
         }
     }
 
@@ -303,6 +375,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             binding: binding,
             displayStyle: productState.preferences.displayStyle,
             hasReadyWakeupConfiguration: hasReadyWakeupConfiguration,
+            wakeupConfiguration: publishedWakeupConfiguration,
             preferences: productState.preferences,
             panelTrust: panelTrust,
             showsFirstRunDisclosure: showsFirstRunDisclosure,

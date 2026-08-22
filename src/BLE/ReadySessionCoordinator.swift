@@ -16,6 +16,8 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
     private var currentConfig: EPDConfig?
     private var rleEnabled = false
     private var timeUnixSeconds: Int?
+    private var sessionGeneration: UInt64 = 0
+    private var pendingConfigWrite: EPDConfig?
 
     init(radio: RadioTransport, clock: DisplayClock) {
         self.radio = radio
@@ -75,6 +77,29 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         confirmedIdentity = nil
         cancelWork()
         emitLink(.unbound)
+    }
+
+    func writeWakeupPin(_ pin: UInt8, sessionGeneration: UInt64, configDigest: Data) -> Bool {
+        guard link == .ready,
+              self.sessionGeneration == sessionGeneration,
+              let identifier = activeIdentifier,
+              let current = currentConfig,
+              current.digest == configDigest,
+              let next = current.replacingWakeupPin(pin),
+              next.differsOnlyByWakeupPin(from: current)
+        else {
+            return false
+        }
+        pendingConfigWrite = next
+        var payload = Data([DisplayLinkUUIDs.setConfigOpcode])
+        payload.append(contentsOf: next.bytes)
+        radio.write(
+            identifier: identifier,
+            characteristic: DisplayLinkUUIDs.data,
+            data: payload,
+            type: .withResponse
+        )
+        return true
     }
 
     func cancelWork() {
@@ -222,16 +247,35 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         }
         if link == .initializing {
             handleMTUText(value)
+            return
+        }
+        if link == .ready, pendingConfigWrite == nil, let config = EPDConfig(data: value) {
+            currentConfig = config
+            delegate?.displayLinkDidUpdateReadyConfig(config)
         }
     }
 
     func radioDidWrite(identifier: UUID, characteristic: UUID, failed: Bool) {
-        guard activeIdentifier == identifier, link == .initializing else {
+        guard activeIdentifier == identifier else {
             return
         }
-        if failed {
-            fail(.initTimeout)
+        if link == .initializing {
+            if failed {
+                fail(.initTimeout)
+            }
+            return
         }
+        guard link == .ready, let written = pendingConfigWrite else {
+            return
+        }
+        pendingConfigWrite = nil
+        if failed {
+            delegate?.displayLinkDidFinishConfigWrite(succeeded: false)
+            return
+        }
+        currentConfig = written
+        delegate?.displayLinkDidUpdateReadyConfig(written)
+        delegate?.displayLinkDidFinishConfigWrite(succeeded: true)
     }
 
     private func startConnect(identifier: UUID) {
@@ -318,6 +362,7 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
             return
         }
         initGateOpen = false
+        sessionGeneration += 1
         emitLink(.ready)
         delegate?.displayLinkDidBecomeReady(
             ReadyBLESession(
@@ -326,7 +371,8 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
                 config: config,
                 mtu: mtu,
                 rleEnabled: rleEnabled,
-                timeUnixSeconds: timeUnixSeconds
+                timeUnixSeconds: timeUnixSeconds,
+                generation: sessionGeneration
             )
         )
     }
@@ -383,6 +429,7 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         currentConfig = nil
         rleEnabled = false
         timeUnixSeconds = nil
+        pendingConfigWrite = nil
     }
 
     private func cancelTimers() {

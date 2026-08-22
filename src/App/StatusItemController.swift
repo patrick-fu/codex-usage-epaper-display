@@ -151,8 +151,25 @@ final class StatusItemController: NSObject {
     }
 
     @objc private func configureWakeupPin() {
-        // Wakeup configuration is owned by a later ticket. The item exists only
-        // when a ready BLE session already has a valid 13-byte configuration.
+        guard let configuration = snapshot?.wakeupConfiguration else {
+            return
+        }
+        guard let pin = confirmations.requestWakeupPinValue(current: configuration.pin),
+              WakeupPin.isAllowed(pin) else {
+            return
+        }
+        guard confirmations.confirmWakeupPinChange(from: configuration.pin, to: pin) else {
+            return
+        }
+        submit?(
+            .configureWakeupPin(
+                WakeupPinWriteRequest(
+                    pin: pin,
+                    sessionGeneration: configuration.sessionGeneration,
+                    configDigest: configuration.configDigest
+                )
+            )
+        )
     }
 
     @objc private func rebuildLocalMetrics() {
