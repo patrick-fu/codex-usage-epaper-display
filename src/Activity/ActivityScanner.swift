@@ -57,6 +57,12 @@ enum ActivityScanner {
         var failure: String?
         var rootsExisted = false
         var winners: [String: Candidate] = [:]
+        var retainedRootFds: [ActivityLayer: Int32] = [:]
+        defer {
+            for fd in retainedRootFds.values {
+                close(fd)
+            }
+        }
 
         for layer in [ActivityLayer.sessions, .archivedSessions] {
             if budget.exhausted {
@@ -77,7 +83,10 @@ enum ActivityScanner {
             case .rejected:
                 coverageComplete = false
                 rootsExisted = true
-            case .candidates(let candidates):
+            case .candidates(let rootFd, let candidates):
+                if let previous = retainedRootFds.updateValue(rootFd, forKey: layer) {
+                    close(previous)
+                }
                 rootsExisted = true
                 for candidate in candidates {
                     mergeWinner(candidate, into: &winners)
@@ -125,9 +134,15 @@ enum ActivityScanner {
                 )
             }
             guard let candidate = winners[sourceKey] else { continue }
+            guard let rootFd = retainedRootFds[candidate.layer] else {
+                coverageComplete = false
+                if failure == nil { failure = "sourceUnreadable" }
+                continue
+            }
             let existing = existingCursors[sourceKey]
             switch ingest(
                 candidate: candidate,
+                rootFd: rootFd,
                 existing: existing,
                 pollStart: pollStart,
                 lastSeenAt: lastSeenAt,
@@ -189,7 +204,7 @@ enum ActivityScanner {
         case missing
         case rejected
         case exhausted
-        case candidates([Candidate])
+        case candidates(rootFd: Int32, [Candidate])
     }
 
     private static func enumerate(
@@ -230,11 +245,11 @@ enum ActivityScanner {
             }
             return .rejected
         }
-        defer { close(rootFd) }
         var opened = stat()
         guard fstat(rootFd, &opened) == 0,
               opened.st_dev == rootStat.st_dev,
               opened.st_ino == rootStat.st_ino else {
+            close(rootFd)
             coverageComplete = false
             if failure == nil { failure = "sourceUnreadable" }
             return .rejected
@@ -254,9 +269,10 @@ enum ActivityScanner {
             failure: &failure
         )
         if walk == .exhausted {
+            close(rootFd)
             return .exhausted
         }
-        return .candidates(candidates)
+        return .candidates(rootFd: rootFd, candidates)
     }
 
     private enum WalkStatus {
@@ -410,16 +426,12 @@ enum ActivityScanner {
 
     private static func ingest(
         candidate: Candidate,
+        rootFd: Int32,
         existing: SourceCursorRecord?,
         pollStart: Date,
         lastSeenAt: Int,
         budget: ScanBudget
     ) -> IngestResult {
-        let rootFd = candidate.rootPath.withCString { open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW) }
-        if rootFd < 0 {
-            return .rejected(errno == EACCES ? "sourcePermissionDenied" : "sourceUnreadable")
-        }
-        defer { close(rootFd) }
         let fileFd = openRelative(rootFd: rootFd, relative: candidate.relativePath)
         if fileFd < 0 {
             return .rejected(errno == EACCES ? "sourcePermissionDenied" : "sourceUnreadable")
@@ -768,7 +780,7 @@ private final class ScanBudget {
     var bytes: Int
 
     init(limits: ActivityScanLimits, consumed: ScanBudget? = nil) {
-        deadline = Date().addingTimeInterval(limits.maxWallTime)
+        deadline = consumed?.deadline ?? Date().addingTimeInterval(limits.maxWallTime)
         maxFiles = limits.maxFiles
         maxBytes = limits.maxBytes
         files = consumed?.files ?? 0

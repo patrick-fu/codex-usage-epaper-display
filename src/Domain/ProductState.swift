@@ -59,6 +59,26 @@ struct LocalActivitySourceRecord: Sendable, Equatable {
         availability: .unknown,
         failure: nil
     )
+
+    static func capturing(
+        observation: LocalActivityObservation,
+        at timestamp: Date,
+        prior: LocalActivitySourceRecord
+    ) -> LocalActivitySourceRecord {
+        let lastSuccess: Int?
+        if observation.failure == "sourceScanTimeout" {
+            lastSuccess = prior.lastSuccessfulObservationAt
+        } else if observation.todayTokens == nil {
+            lastSuccess = nil
+        } else {
+            lastSuccess = Int(timestamp.timeIntervalSince1970.rounded(.towardZero))
+        }
+        return LocalActivitySourceRecord(
+            lastSuccessfulObservationAt: lastSuccess,
+            availability: observation.availability,
+            failure: observation.failure
+        )
+    }
 }
 
 struct RefreshRecord: Sendable, Equatable {

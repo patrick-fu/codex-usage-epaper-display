@@ -145,29 +145,29 @@ enum TokenCountParser {
             if CFGetTypeID(number) == CFBooleanGetTypeID() {
                 return nil
             }
-            let value = number.doubleValue
-            guard value.isFinite, value >= 0, value <= Double(Int64.max) else {
+            let cf = number as CFNumber
+            var int64: Int64 = 0
+            guard CFNumberGetValue(cf, .sInt64Type, &int64) else {
                 return nil
             }
-            guard value.rounded(.towardZero) == value else {
-                return nil
+            if CFNumberIsFloatType(cf) {
+                var doubleValue: Double = 0
+                guard CFNumberGetValue(cf, .doubleType, &doubleValue),
+                      doubleValue.isFinite,
+                      doubleValue == Double(int64) else {
+                    return nil
+                }
             }
-            return Int64(value)
+            return int64 >= 0 ? int64 : nil
         }
         if let value = raw as? Double {
-            guard value.isFinite, value >= 0, value <= Double(Int64.max) else {
-                return nil
-            }
-            guard value.rounded(.towardZero) == value else {
+            guard value.isFinite, value >= 0, value < 0x1p63, value.rounded(.towardZero) == value else {
                 return nil
             }
             return Int64(value)
         }
         if let value = raw as? Float {
-            guard value.isFinite, value >= 0, value <= Float(Int64.max) else {
-                return nil
-            }
-            guard value.rounded(.towardZero) == value else {
+            guard value.isFinite, value >= 0, Double(value) < 0x1p63, value.rounded(.towardZero) == value else {
                 return nil
             }
             return Int64(value)

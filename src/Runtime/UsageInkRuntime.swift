@@ -386,16 +386,10 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
     }
 
     private func record(from observation: LocalActivityObservation, at timestamp: Date) -> LocalActivitySourceRecord {
-        let lastSuccess: Int?
-        if observation.todayTokens == nil {
-            lastSuccess = nil
-        } else {
-            lastSuccess = Int(timestamp.timeIntervalSince1970.rounded(.towardZero))
-        }
-        return LocalActivitySourceRecord(
-            lastSuccessfulObservationAt: lastSuccess,
-            availability: observation.availability,
-            failure: observation.failure
+        LocalActivitySourceRecord.capturing(
+            observation: observation,
+            at: timestamp,
+            prior: productState.localActivity
         )
     }
 

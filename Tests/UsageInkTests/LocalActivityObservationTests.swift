@@ -128,4 +128,44 @@ final class LocalActivityObservationTests: XCTestCase {
         XCTAssertNil(observation.weekTokens)
         XCTAssertNotEqual(observation.availability, .fresh)
     }
+
+    func testTimeoutKeepsPriorObservationTime() {
+        let prior = LocalActivitySourceRecord(
+            lastSuccessfulObservationAt: 1_787_356_800,
+            availability: .fresh,
+            failure: nil
+        )
+        let timeout = LocalActivityObservation(
+            availability: .fresh,
+            failure: "sourceScanTimeout",
+            todayTokens: 33,
+            weekTokens: 33,
+            cacheHitRate: nil,
+            tps: 0,
+            coverageComplete: false
+        )
+        let later = Date(timeIntervalSince1970: 1_787_356_800 + 600)
+        let retained = LocalActivitySourceRecord.capturing(
+            observation: timeout,
+            at: later,
+            prior: prior
+        )
+        XCTAssertEqual(retained.lastSuccessfulObservationAt, 1_787_356_800)
+        XCTAssertEqual(retained.failure, "sourceScanTimeout")
+        let partial = LocalActivityObservation(
+            availability: .fresh,
+            failure: "sourcePartialTail",
+            todayTokens: 33,
+            weekTokens: 33,
+            cacheHitRate: nil,
+            tps: 0,
+            coverageComplete: false
+        )
+        let committed = LocalActivitySourceRecord.capturing(
+            observation: partial,
+            at: later,
+            prior: prior
+        )
+        XCTAssertEqual(committed.lastSuccessfulObservationAt, 1_787_356_800 + 600)
+    }
 }

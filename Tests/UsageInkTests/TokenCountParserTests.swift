@@ -131,4 +131,23 @@ final class TokenCountParserTests: XCTestCase {
         XCTAssertEqual(TokenCountParser.parseLine(boolean, pollStart: poll), .malformed("total_token_usage"))
         XCTAssertEqual(TokenCountParser.parseLine(text, pollStart: poll), .malformed("total_token_usage"))
     }
+
+    func testInt64MaxIsAcceptedAndOverflowIsMalformed() {
+        let maximum = """
+        {"timestamp":"2026-08-22T00:00:00.000Z","type":"event_msg","payload":{"type":"token_count","total_token_usage":{"input_tokens":9223372036854775807,"output_tokens":1},"last_token_usage":{"input_tokens":0,"output_tokens":0}}}
+        """
+        switch TokenCountParser.parseLine(maximum, pollStart: poll) {
+        case .counters(_, let total):
+            XCTAssertEqual(total.input, Int64.max)
+            XCTAssertEqual(total.output, 1)
+        case .ignored:
+            XCTFail("ignored")
+        case .malformed(let reason):
+            XCTFail("malformed \(reason)")
+        }
+        let overflow = """
+        {"timestamp":"2026-08-22T00:00:00.000Z","type":"event_msg","payload":{"type":"token_count","total_token_usage":{"input_tokens":9223372036854775808,"output_tokens":1}}}
+        """
+        XCTAssertEqual(TokenCountParser.parseLine(overflow, pollStart: poll), .malformed("total_token_usage"))
+    }
 }
