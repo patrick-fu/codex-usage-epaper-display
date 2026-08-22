@@ -45,6 +45,9 @@ final class StatusItemController: NSObject {
         self.snapshot = snapshot
         settings.apply(snapshot)
         bindPanel.apply(snapshot)
+        if snapshot.binding == .bound {
+            settings.dismissBindScan(bindPanel)
+        }
         rebuildMenu()
         if snapshot.shouldPresentSettingsOnLaunch && !didAutoPresentFirstRun {
             didAutoPresentFirstRun = true
@@ -121,7 +124,7 @@ final class StatusItemController: NSObject {
     }
 
     @objc private func findAndBindDisplay() {
-        bindPanel.show()
+        settings.presentBindScan(bindPanel)
         submit?(.findAndBindDisplay)
     }
 

@@ -77,16 +77,59 @@ enum BLEClassification: String, Sendable, Equatable {
     }
 
     func menuText(language: ResolvedInterfaceLanguage) -> String {
+        let english: String
+        let chinese: String
         switch self {
         case .firmwareIncompatible:
-            return language == .english ? "Display firmware incompatible" : "显示器固件不兼容"
+            english = "Display firmware incompatible"
+            chinese = "显示器固件不兼容"
         case .bluetoothUnauthorized:
-            return language == .english ? "Bluetooth unauthorized" : "蓝牙未授权"
+            english = "Bluetooth unauthorized"
+            chinese = "蓝牙未授权"
         case .bluetoothUnavailable:
-            return language == .english ? "Bluetooth unavailable" : "蓝牙不可用"
-        default:
-            return rawValue
+            english = "Bluetooth unavailable"
+            chinese = "蓝牙不可用"
+        case .boundDisplayNotFound:
+            english = "Bound Display not found"
+            chinese = "未找到绑定显示器"
+        case .connectFailed:
+            english = "Display connection failed"
+            chinese = "显示器连接失败"
+        case .serviceMissing:
+            english = "Display service missing"
+            chinese = "显示器服务缺失"
+        case .characteristicMissing:
+            english = "Display characteristic missing"
+            chinese = "显示器特征缺失"
+        case .subscribeFailed:
+            english = "Display subscribe failed"
+            chinese = "显示器订阅失败"
+        case .configTimeout:
+            english = "Display config timeout"
+            chinese = "显示器配置超时"
+        case .initTimeout:
+            english = "Display init timeout"
+            chinese = "显示器初始化超时"
+        case .mtuInvalid:
+            english = "Display MTU invalid"
+            chinese = "显示器 MTU 无效"
+        case .planeTimeout:
+            english = "Display transfer timeout"
+            chinese = "显示器传输超时"
+        case .refreshTimeout:
+            english = "Display refresh timeout"
+            chinese = "显示器刷新超时"
+        case .disconnected:
+            english = "Display disconnected"
+            chinese = "显示器已断开"
+        case .callbackAmbiguous:
+            english = "Display session ambiguous"
+            chinese = "显示器会话不明确"
+        case .retryExhausted, .unknown:
+            english = "Display unavailable"
+            chinese = "显示器不可用"
         }
+        return language == .english ? english : chinese
     }
 }
 
@@ -101,8 +144,6 @@ enum DisplayLinkUUIDs {
     static let initOpcode: UInt8 = 0x01
     static let setConfigOpcode: UInt8 = 0x90
     static let forbiddenOpcodes: Set<UInt8> = [0x00, 0x02, 0x03, 0x04, 0x06, 0x91, 0x92, 0x99]
-
-    static let sampleConfig = Data([8, 7, 6, 5, 4, 3, 2, 1, 0xFF, 0, 1, 0, 1])
 }
 
 struct BindCandidate: Sendable, Equatable {

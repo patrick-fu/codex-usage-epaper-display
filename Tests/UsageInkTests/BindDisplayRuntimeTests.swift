@@ -163,6 +163,84 @@ final class BindDisplayRuntimeTests: XCTestCase {
         XCTAssertTrue(harness.box.snapshot?.hasReadyWakeupConfiguration ?? false)
     }
 
+
+    func testSaveFailureCancelsReadySessionAndDoesNotGhostRecover() throws {
+        let harness = try RuntimeHarness(simulatedSaveError: .writeFailed)
+        waitStart(harness)
+        harness.radio.peripherals[desk] = FakePeripheralSpec()
+        waitForScan(harness)
+        let failed = waitFor(harness, "save-failed") {
+            $0.storageClassification == .stateWriteFailed && $0.binding == .unbound && $0.bleLink != .ready
+        }
+        harness.runtime.submit(.bindDisplay(desk))
+        wait(for: [failed], timeout: 1.0)
+        XCTAssertEqual(harness.box.snapshot?.binding, .unbound)
+        XCTAssertEqual(harness.box.snapshot?.panelTrust, .invalid)
+        XCTAssertFalse(harness.box.snapshot?.hasReadyWakeupConfiguration ?? true)
+        XCTAssertNotEqual(harness.box.snapshot?.bleLink, .ready)
+        let initWrites = harness.radio.writes.count
+
+        harness.radio.setAvailability(.unauthorized)
+        let denied = waitFor(harness, "denied-unbound") { $0.bleLink == .unavailable || $0.lastBLEClassification == .bluetoothUnauthorized }
+        wait(for: [denied], timeout: 1.0)
+        let ghost = waitFor(harness, "no-ghost") { $0.bleLink == .ready }
+        ghost.isInverted = true
+        harness.radio.setAvailability(.poweredOn)
+        wait(for: [ghost], timeout: 0.2)
+        XCTAssertNotEqual(harness.box.snapshot?.bleLink, .ready)
+        XCTAssertEqual(harness.box.snapshot?.binding, .unbound)
+        XCTAssertEqual(harness.radio.writes.count, initWrites)
+        switch PersistenceStore(root: harness.root).load() {
+        case .missing:
+            break
+        case .loaded(let state) where state.boundDisplay == nil:
+            break
+        default:
+            XCTFail("failed save must not leave a durable binding")
+        }
+    }
+
+    func testBoundDisplayRejectsASecondIdentity() throws {
+        let shelf = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let harness = try RuntimeHarness()
+        waitStart(harness)
+        harness.radio.peripherals[desk] = FakePeripheralSpec(name: "Desk")
+        harness.radio.peripherals[shelf] = FakePeripheralSpec(name: "Shelf")
+        waitForScan(harness)
+        let ready = waitFor(harness, "ready") { $0.bleLink == .ready && $0.hasReadyWakeupConfiguration }
+        harness.runtime.submit(.bindDisplay(desk))
+        wait(for: [ready], timeout: 1.0)
+        let writes = harness.radio.writes.count
+        harness.runtime.submit(.bindDisplay(shelf))
+        let unchanged = waitFor(harness, "still-desk") { $0.bleLink == .ready && $0.binding == .bound }
+        unchanged.isInverted = false
+        wait(for: [unchanged], timeout: 0.2)
+        XCTAssertEqual(harness.box.snapshot?.bleLink, .ready)
+        XCTAssertEqual(harness.radio.writes.count, writes)
+        switch PersistenceStore(root: harness.root).load() {
+        case .loaded(let state):
+            XCTAssertEqual(state.boundDisplay?.identifier, desk.uuidString)
+        default:
+            XCTFail("original Bound Display must remain")
+        }
+    }
+
+    func testDisconnectKeepsDurableBindingWithoutLiveSession() throws {
+        let harness = try RuntimeHarness()
+        waitStart(harness)
+        harness.radio.peripherals[desk] = FakePeripheralSpec()
+        waitForScan(harness)
+        let ready = waitFor(harness, "ready") { $0.bleLink == .ready && $0.hasReadyWakeupConfiguration }
+        harness.runtime.submit(.bindDisplay(desk))
+        wait(for: [ready], timeout: 1.0)
+        let dropped = waitFor(harness, "dropped") {
+            $0.bleLink == .disconnected && $0.binding == .bound && $0.hasReadyWakeupConfiguration == false
+        }
+        harness.radio.emitDisconnect(desk)
+        wait(for: [dropped], timeout: 1.0)
+        XCTAssertEqual(harness.box.snapshot?.panelTrust, .invalid)
+    }
+
     private func waitStart(_ harness: RuntimeHarness) {
         let started = waitFor(harness, "start") { _ in true }
         harness.runtime.start()
@@ -194,7 +272,7 @@ private final class RuntimeHarness {
     let box = SnapshotProbe()
     let runtime: UsageInkRuntime
 
-    init() throws {
+    init(simulatedSaveError: PersistenceError? = nil) throws {
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("usageink-bind-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -203,7 +281,7 @@ private final class RuntimeHarness {
         let box = self.box
         runtime = UsageInkRuntime(
             language: .english,
-            store: PersistenceStore(root: root),
+            store: PersistenceStore(root: root, simulatedSaveError: simulatedSaveError),
             makeLink: { queue in
                 radio.queue = queue
                 clock.queue = queue

@@ -7,16 +7,15 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
     private var availability: RadioAvailability = .unknown
     private var link: BLELinkState = .unbound
     private var candidates: [UUID: BindCandidate] = [:]
-    private var persistedBinding: UUID?
+    private var confirmedIdentity: UUID?
     private var activeIdentifier: UUID?
     private var advertisedNames: [UUID: String] = [:]
     private var sawConfig = false
-    private var awaitingFreshMTU = false
+    private var initGateOpen = false
+    private var initGeneration = 0
     private var currentConfig: EPDConfig?
     private var rleEnabled = false
     private var timeUnixSeconds: Int?
-    private var sawUnavailableThisProcess = false
-    private var didCompleteInitialAvailability = false
 
     init(radio: RadioTransport, clock: DisplayClock) {
         self.radio = radio
@@ -28,9 +27,9 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         radio.start()
     }
 
-    func setPersistedBinding(_ identifier: UUID?) {
-        persistedBinding = identifier
-        if identifier != nil, link == .unbound {
+    func confirmBoundIdentity(_ identifier: UUID?) {
+        confirmedIdentity = identifier
+        if identifier != nil, link == .unbound || link == .disconnected {
             emitLink(.disconnected)
         } else if identifier == nil, link == .disconnected {
             emitLink(.unbound)
@@ -38,7 +37,7 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
     }
 
     func startBindScan() {
-        guard persistedBinding == nil else {
+        guard confirmedIdentity == nil else {
             return
         }
         guard availability == .poweredOn else {
@@ -56,6 +55,9 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
     }
 
     func bind(identifier: UUID) {
+        if let confirmedIdentity, confirmedIdentity != identifier {
+            return
+        }
         startConnect(identifier: identifier)
     }
 
@@ -63,12 +65,15 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         guard availability == .poweredOn else {
             return
         }
+        guard confirmedIdentity == identifier else {
+            return
+        }
         startConnect(identifier: identifier)
     }
 
     func unbind() {
+        confirmedIdentity = nil
         cancelWork()
-        persistedBinding = nil
         emitLink(.unbound)
     }
 
@@ -79,9 +84,11 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
             radio.cancelConnection(identifier: activeIdentifier)
         }
         resetSession()
-        if persistedBinding != nil {
+        if confirmedIdentity != nil {
             emitLink(link == .unavailable ? .unavailable : .disconnected)
-        } else if availability == .poweredOn {
+        } else if availability == .unauthorized || availability == .unavailable {
+            emitLink(.unavailable)
+        } else {
             emitLink(.unbound)
         }
     }
@@ -89,26 +96,19 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
     func radioDidChangeAvailability(_ availability: RadioAvailability) {
         let previous = self.availability
         self.availability = availability
-        delegate?.displayLinkDidChangeAvailability(availability)
         switch availability {
         case .unknown:
             break
         case .unauthorized:
-            sawUnavailableThisProcess = true
             failLiveSession(classification: .bluetoothUnauthorized, linkState: .unavailable)
         case .unavailable:
-            sawUnavailableThisProcess = true
             failLiveSession(classification: .bluetoothUnavailable, linkState: .unavailable)
         case .poweredOn:
             if link == .unavailable || previous != .poweredOn {
-                emitLink(persistedBinding == nil ? .unbound : .disconnected)
-            }
-            let shouldRecover = didCompleteInitialAvailability && sawUnavailableThisProcess && persistedBinding != nil
-            didCompleteInitialAvailability = true
-            if shouldRecover, let persistedBinding {
-                recover(identifier: persistedBinding)
+                emitLink(idleLink())
             }
         }
+        delegate?.displayLinkDidChangeAvailability(availability)
     }
 
     func radioDidDiscover(identifier: UUID, name: String?, rssi: Int) {
@@ -138,13 +138,13 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
     }
 
     func radioDidDisconnect(identifier: UUID) {
-        guard activeIdentifier == identifier || persistedBinding == identifier else {
+        guard activeIdentifier == identifier || confirmedIdentity == identifier else {
             return
         }
         if link == .ready || activeIdentifier == identifier {
             resetSession()
             classify(.disconnected)
-            emitLink(persistedBinding == nil ? .unbound : .disconnected)
+            emitLink(idleLink())
             delegate?.displayLinkDidDisconnect()
         }
     }
@@ -231,9 +231,7 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         }
         if failed {
             fail(.initTimeout)
-            return
         }
-        awaitingFreshMTU = true
     }
 
     private func startConnect(identifier: UUID) {
@@ -278,12 +276,15 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         }
         clock.cancel(id: "config")
         currentConfig = config
+        rleEnabled = false
+        timeUnixSeconds = nil
         emitLink(.initializing)
-        let payload = Data([DisplayLinkUUIDs.initOpcode])
+        initGeneration += 1
+        initGateOpen = true
         radio.write(
             identifier: activeIdentifier!,
             characteristic: DisplayLinkUUIDs.data,
-            data: payload,
+            data: Data([DisplayLinkUUIDs.initOpcode]),
             type: .withResponse
         )
         clock.schedule(id: "init", after: 5) { [weak self] in
@@ -292,6 +293,9 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
     }
 
     private func handleMTUText(_ value: Data) {
+        guard initGateOpen, initGeneration > 0 else {
+            return
+        }
         guard let text = String(data: value, encoding: .utf8) else {
             return
         }
@@ -301,7 +305,7 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         if let time = parseTaggedInt(text, tag: "t=") {
             timeUnixSeconds = time
         }
-        guard awaitingFreshMTU, let mtu = parseTaggedInt(text, tag: "mtu=") else {
+        guard let mtu = parseTaggedInt(text, tag: "mtu=") else {
             return
         }
         if mtu == DisplayLinkUUIDs.appleDefaultMTU {
@@ -313,8 +317,8 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
             fail(.unknown)
             return
         }
+        initGateOpen = false
         emitLink(.ready)
-        persistedBinding = identifier
         delegate?.displayLinkDidBecomeReady(
             ReadyBLESession(
                 identifier: identifier,
@@ -365,7 +369,7 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
     }
 
     private func idleLink() -> BLELinkState {
-        persistedBinding == nil ? .unbound : .disconnected
+        confirmedIdentity == nil ? .unbound : .disconnected
     }
 
     private func resetSession() {
@@ -375,7 +379,7 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
 
     private func resetSessionFlags() {
         sawConfig = false
-        awaitingFreshMTU = false
+        initGateOpen = false
         currentConfig = nil
         rleEnabled = false
         timeUnixSeconds = nil

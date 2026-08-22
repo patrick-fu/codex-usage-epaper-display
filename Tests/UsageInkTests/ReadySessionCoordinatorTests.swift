@@ -20,7 +20,7 @@ final class ReadySessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(harness.candidates[0].rssi, -21)
     }
 
-    func testCompatibleDeviceReachesReadyAfterConfigInitAndFreshMTU() {
+    func testCompatibleDisplayReachesReadyAfterConfigInitAndFreshMTU() {
         let harness = CoordinatorHarness()
         harness.radio.peripherals[desk] = FakePeripheralSpec()
         harness.coordinator.attach()
@@ -126,19 +126,31 @@ final class ReadySessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(harness.classification, .serviceMissing)
     }
 
-    func testStaleMTUBeforeInitAndAppleDefaultAreRejected() {
-        let stale = CoordinatorHarness()
+    func testFreshMTUMayArriveBeforeWriteCallback() {
+        let harness = CoordinatorHarness()
         var spec = FakePeripheralSpec()
         spec.autoMTUText = "mtu=185"
         spec.mtuBeforeWriteAck = true
-        stale.radio.peripherals[desk] = spec
-        stale.coordinator.attach()
-        stale.coordinator.startBindScan()
-        stale.coordinator.bind(identifier: desk)
-        XCTAssertEqual(stale.link, .initializing)
-        XCTAssertNil(stale.session)
-        stale.clock.advance(5)
-        XCTAssertEqual(stale.classification, .initTimeout)
+        harness.radio.peripherals[desk] = spec
+        harness.coordinator.attach()
+        harness.coordinator.startBindScan()
+        harness.coordinator.bind(identifier: desk)
+        XCTAssertEqual(harness.link, .ready)
+        XCTAssertEqual(harness.session?.mtu, 185)
+    }
+
+    func testPreInitNotifyIsRejectedAndAppleDefaultMTUIsInvalid() {
+        let first = CoordinatorHarness()
+        var spec = FakePeripheralSpec()
+        spec.extraFirstNotify = Data("mtu=185 rle=1 t=1".utf8)
+        spec.autoConfig = BLETestFixtures.sampleConfig
+        first.radio.peripherals[desk] = spec
+        first.coordinator.attach()
+        first.coordinator.startBindScan()
+        first.coordinator.bind(identifier: desk)
+        XCTAssertEqual(first.classification, .callbackAmbiguous)
+        XCTAssertTrue(first.radio.writes.isEmpty)
+        XCTAssertNil(first.session)
 
         let second = CoordinatorHarness()
         var later = FakePeripheralSpec()
@@ -149,6 +161,100 @@ final class ReadySessionCoordinatorTests: XCTestCase {
         second.coordinator.bind(identifier: desk)
         XCTAssertEqual(second.classification, .mtuInvalid)
         XCTAssertNotEqual(second.link, .ready)
+    }
+
+    func testPreviousSessionRLEDoesNotPolluteNextInit() {
+        let harness = CoordinatorHarness()
+        var spec = FakePeripheralSpec()
+        spec.autoMTUText = "mtu=185 rle=1 t=1700000000"
+        harness.radio.peripherals[desk] = spec
+        harness.coordinator.attach()
+        harness.coordinator.startBindScan()
+        harness.coordinator.bind(identifier: desk)
+        XCTAssertEqual(harness.session?.rleEnabled, true)
+        harness.coordinator.confirmBoundIdentity(desk)
+        harness.radio.emitDisconnect(desk)
+
+        spec.autoMTUText = "mtu=185"
+        harness.radio.peripherals[desk] = spec
+        harness.session = nil
+        harness.coordinator.recover(identifier: desk)
+        XCTAssertEqual(harness.link, .ready)
+        XCTAssertEqual(harness.session?.mtu, 185)
+        XCTAssertEqual(harness.session?.rleEnabled, false)
+        XCTAssertNil(harness.session?.timeUnixSeconds)
+    }
+
+    func testSubscribeFailedIsClassifiedWithoutInit() {
+        let harness = CoordinatorHarness()
+        var spec = FakePeripheralSpec()
+        spec.notifySucceeds = false
+        harness.radio.peripherals[desk] = spec
+        harness.coordinator.attach()
+        harness.coordinator.startBindScan()
+        harness.coordinator.bind(identifier: desk)
+        XCTAssertEqual(harness.classification, .subscribeFailed)
+        XCTAssertTrue(harness.radio.writes.isEmpty)
+    }
+
+    func testNonOneByteVersionIsTreatedAsIncompatibleFirmware() {
+        let harness = CoordinatorHarness()
+        var spec = FakePeripheralSpec()
+        spec.versionPayload = Data([0x16, 0x00])
+        harness.radio.peripherals[desk] = spec
+        harness.coordinator.attach()
+        harness.coordinator.startBindScan()
+        harness.coordinator.bind(identifier: desk)
+        XCTAssertEqual(harness.classification, .firmwareIncompatible)
+        XCTAssertTrue(harness.radio.writes.isEmpty)
+    }
+
+    func testDisconnectDropsReadySession() {
+        let harness = CoordinatorHarness()
+        harness.radio.peripherals[desk] = FakePeripheralSpec()
+        harness.coordinator.attach()
+        harness.coordinator.startBindScan()
+        harness.coordinator.bind(identifier: desk)
+        XCTAssertEqual(harness.link, .ready)
+        harness.coordinator.confirmBoundIdentity(desk)
+        harness.radio.emitDisconnect(desk)
+        XCTAssertEqual(harness.classification, .disconnected)
+        XCTAssertEqual(harness.link, .disconnected)
+    }
+
+    func testCoordinatorDoesNotRecoverUntilAsked() {
+        let harness = CoordinatorHarness()
+        harness.radio.peripherals[desk] = FakePeripheralSpec()
+        harness.coordinator.attach()
+        harness.coordinator.confirmBoundIdentity(desk)
+        harness.radio.setAvailability(.unauthorized)
+        harness.radio.setAvailability(.poweredOn)
+        XCTAssertNotEqual(harness.link, .ready)
+        XCTAssertEqual(harness.link, .disconnected)
+        XCTAssertTrue(harness.radio.writes.isEmpty)
+        harness.coordinator.recover(identifier: desk)
+        XCTAssertEqual(harness.link, .ready)
+        XCTAssertEqual(harness.radio.writes.count, 1)
+    }
+
+    func testClassificationCopyIsLocalizedNotCamelCase() {
+        for classification in [
+            BLEClassification.boundDisplayNotFound,
+            .connectFailed,
+            .subscribeFailed,
+            .configTimeout,
+            .mtuInvalid,
+            .disconnected,
+            .callbackAmbiguous,
+        ] {
+            let english = classification.menuText(language: .english)
+            let chinese = classification.menuText(language: .simplifiedChinese)
+            XCTAssertNotEqual(english, classification.rawValue)
+            XCTAssertFalse(english.first?.isLowercase ?? true)
+            XCTAssertNotEqual(english, chinese)
+            XCTAssertFalse(english.isEmpty)
+            XCTAssertFalse(chinese.isEmpty)
+        }
     }
 
     func testTimeoutsUseTheInjectedClock() {

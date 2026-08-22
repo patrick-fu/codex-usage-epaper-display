@@ -48,6 +48,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
     private var bleLink: BLELinkState = .unbound
     private var bindCandidates: [BindCandidate] = []
     private var lastBLEClassification: BLEClassification?
+    private var bluetoothBecameUnavailable = false
 
     var persistenceRoot: URL {
         store.root
@@ -74,11 +75,8 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             hasReadyWakeupConfiguration = false
             lastBLEClassification = nil
             bindCandidates = []
-            if let identifier = persistedBindingIdentifier {
-                link.setPersistedBinding(identifier)
-            } else {
-                link.setPersistedBinding(nil)
-            }
+            bluetoothBecameUnavailable = false
+            link.confirmBoundIdentity(persistedBindingIdentifier)
             link.attach()
             publish()
         }
@@ -94,6 +92,19 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
 
     func displayLinkDidChangeAvailability(_ availability: RadioAvailability) {
         dispatchPrecondition(condition: .onQueue(queue))
+        switch availability {
+        case .unauthorized, .unavailable:
+            bluetoothBecameUnavailable = true
+            hasReadyWakeupConfiguration = false
+            panelTrust = .invalid
+        case .poweredOn:
+            if bluetoothBecameUnavailable, let identifier = persistedBindingIdentifier {
+                bluetoothBecameUnavailable = false
+                link.recover(identifier: identifier)
+            }
+        case .unknown:
+            break
+        }
         publish()
     }
 
@@ -121,16 +132,36 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
 
     func displayLinkDidBecomeReady(_ session: ReadyBLESession) {
         dispatchPrecondition(condition: .onQueue(queue))
-        bleLink = .ready
-        hasReadyWakeupConfiguration = true
-        lastBLEClassification = nil
-        binding = .bound
-        persistBinding(
-            BoundDisplayRecord(
-                identifier: session.identifier.uuidString,
-                displayName: ProductState.sanitizedDisplayName(session.advertisedName)
-            )
+        let record = BoundDisplayRecord(
+            identifier: session.identifier.uuidString,
+            displayName: ProductState.sanitizedDisplayName(session.advertisedName)
         )
+        var candidate = productState
+        candidate.boundDisplay = record
+        do {
+            try store.save(candidate)
+            productState = candidate
+            showsFirstRunDisclosure = false
+            shouldPresentSettingsOnLaunch = false
+            storageClassification = nil
+            isPersistenceWritable = true
+            binding = .bound
+            bleLink = .ready
+            hasReadyWakeupConfiguration = true
+            lastBLEClassification = nil
+            bindCandidates = []
+            panelTrust = .invalid
+            link.confirmBoundIdentity(session.identifier)
+        } catch PersistenceError.readOnlyUnsupportedSchema {
+            rejectReadySession()
+            applyLoad(store.load())
+            isPersistenceWritable = false
+            storageClassification = .stateVersionUnsupported
+        } catch {
+            rejectReadySession()
+            applyLoad(store.load())
+            storageClassification = .stateWriteFailed
+        }
         publish()
     }
 
@@ -149,8 +180,12 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         case .refreshNow, .rebuildLocalMetrics:
             break
         case .findAndBindDisplay:
+            guard persistedBindingIdentifier == nil else { return }
             link.startBindScan()
         case .bindDisplay(let identifier):
+            if let bound = persistedBindingIdentifier, bound != identifier {
+                return
+            }
             link.bind(identifier: identifier)
         case .unbindDisplay:
             performUnbind()
@@ -193,14 +228,14 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         panelTrust = .invalid
     }
 
-    private func persistBinding(_ record: BoundDisplayRecord) {
-        var candidate = productState
-        candidate.boundDisplay = record
-        persistCandidate(candidate)
-        if productState.boundDisplay != nil {
-            binding = .bound
-            link.setPersistedBinding(UUID(uuidString: record.identifier))
-        }
+    private func rejectReadySession() {
+        link.cancelWork()
+        binding = .unbound
+        bleLink = .unbound
+        hasReadyWakeupConfiguration = false
+        panelTrust = .invalid
+        bluetoothBecameUnavailable = false
+        link.confirmBoundIdentity(nil)
     }
 
     private func applyLoad(_ result: PersistenceLoadResult) {

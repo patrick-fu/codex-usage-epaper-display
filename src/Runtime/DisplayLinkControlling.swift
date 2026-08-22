@@ -18,7 +18,7 @@ protocol DisplayLinkDelegate: AnyObject {
 protocol DisplayLinkControlling: AnyObject {
     var delegate: DisplayLinkDelegate? { get set }
     func attach()
-    func setPersistedBinding(_ identifier: UUID?)
+    func confirmBoundIdentity(_ identifier: UUID?)
     func startBindScan()
     func bind(identifier: UUID)
     func recover(identifier: UUID)
@@ -30,7 +30,7 @@ final class NullDisplayLink: DisplayLinkControlling {
     weak var delegate: DisplayLinkDelegate?
 
     func attach() {}
-    func setPersistedBinding(_ identifier: UUID?) {}
+    func confirmBoundIdentity(_ identifier: UUID?) {}
     func startBindScan() {}
     func bind(identifier: UUID) {}
     func recover(identifier: UUID) {}

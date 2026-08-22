@@ -62,15 +62,19 @@ final class BindScanPanelController: NSObject {
         panel
     }
 
-    func show() {
-        panel.center()
-        panel.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
     func apply(_ snapshot: RuntimeSnapshot) {
         statusField.stringValue = statusText(from: snapshot)
         rebuildCandidates(snapshot.bindCandidates)
+        if snapshot.binding == .bound {
+            dismiss()
+        }
+    }
+
+    func dismiss() {
+        if let parent = panel.sheetParent {
+            parent.endSheet(panel)
+        }
+        panel.orderOut(nil)
     }
 
     func view(withIdentifier identifier: String) -> NSView? {

@@ -1,6 +1,10 @@
 import Foundation
 @testable import UsageInk
 
+enum BLETestFixtures {
+    static let sampleConfig = Data([8, 7, 6, 5, 4, 3, 2, 1, 0xFF, 0, 1, 0, 1])
+}
+
 final class ManualDisplayClock: DisplayClock {
     private var now: TimeInterval = 0
     private var tasks: [String: (fireAt: TimeInterval, body: () -> Void)] = [:]
@@ -47,9 +51,10 @@ struct FakePeripheralSpec {
         .versionDefault,
     ]
     var versionByte: UInt8? = 0x16
+    var versionPayload: Data?
     var notifySucceeds: Bool = true
     var writeSucceeds: Bool = true
-    var autoConfig: Data? = DisplayLinkUUIDs.sampleConfig
+    var autoConfig: Data? = BLETestFixtures.sampleConfig
     var autoMTUText: String? = "mtu=185"
     var extraFirstNotify: Data?
     var connectHangs: Bool = false
@@ -138,7 +143,14 @@ final class FakeRadio: RadioTransport {
     }
 
     func read(identifier: UUID, characteristic: UUID) {
-        if characteristic == DisplayLinkUUIDs.version, let byte = peripherals[identifier]?.versionByte {
+        guard characteristic == DisplayLinkUUIDs.version else {
+            return
+        }
+        if let payload = peripherals[identifier]?.versionPayload {
+            emitValue(identifier: identifier, characteristic: characteristic, value: payload)
+            return
+        }
+        if let byte = peripherals[identifier]?.versionByte {
             emitValue(identifier: identifier, characteristic: characteristic, value: Data([byte]))
         }
     }

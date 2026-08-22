@@ -122,15 +122,20 @@ final class NRF5Radio: NSObject, RadioTransport, CBCentralManagerDelegate, CBPer
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        let services = (peripheral.services ?? []).compactMap { UUID(uuidString: $0.uuid.uuidString) }
+        let services = (peripheral.services ?? []).compactMap { parsedUUID(from: $0) }
         delegate?.radioDidDiscoverServices(identifier: peripheral.identifier, services: services)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+        guard let serviceUUID = parsedUUID(from: service) else {
+            return
+        }
         var mapped: [RadioCharacteristic] = []
         var stored = characteristics[peripheral.identifier] ?? [:]
         for characteristic in service.characteristics ?? [] {
-            let uuid = UUID(uuidString: characteristic.uuid.uuidString) ?? UUID()
+            guard let uuid = parsedUUID(from: characteristic) else {
+                continue
+            }
             stored[uuid] = characteristic
             mapped.append(
                 RadioCharacteristic(
@@ -143,7 +148,6 @@ final class NRF5Radio: NSObject, RadioTransport, CBCentralManagerDelegate, CBPer
             )
         }
         characteristics[peripheral.identifier] = stored
-        let serviceUUID = UUID(uuidString: service.uuid.uuidString) ?? DisplayLinkUUIDs.service
         delegate?.radioDidDiscoverCharacteristics(
             identifier: peripheral.identifier,
             service: serviceUUID,
@@ -156,7 +160,9 @@ final class NRF5Radio: NSObject, RadioTransport, CBCentralManagerDelegate, CBPer
         didUpdateNotificationStateFor characteristic: CBCharacteristic,
         error: Error?
     ) {
-        let uuid = UUID(uuidString: characteristic.uuid.uuidString) ?? DisplayLinkUUIDs.data
+        guard let uuid = parsedUUID(from: characteristic) else {
+            return
+        }
         delegate?.radioDidUpdateNotificationState(
             identifier: peripheral.identifier,
             characteristic: uuid,
@@ -166,7 +172,9 @@ final class NRF5Radio: NSObject, RadioTransport, CBCentralManagerDelegate, CBPer
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-        let uuid = UUID(uuidString: characteristic.uuid.uuidString) ?? DisplayLinkUUIDs.data
+        guard let uuid = parsedUUID(from: characteristic) else {
+            return
+        }
         delegate?.radioDidUpdateValue(
             identifier: peripheral.identifier,
             characteristic: uuid,
@@ -175,7 +183,9 @@ final class NRF5Radio: NSObject, RadioTransport, CBCentralManagerDelegate, CBPer
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
-        let uuid = UUID(uuidString: characteristic.uuid.uuidString) ?? DisplayLinkUUIDs.data
+        guard let uuid = parsedUUID(from: characteristic) else {
+            return
+        }
         delegate?.radioDidWrite(identifier: peripheral.identifier, characteristic: uuid, failed: error != nil)
     }
 
@@ -189,6 +199,18 @@ final class NRF5Radio: NSObject, RadioTransport, CBCentralManagerDelegate, CBPer
             return retrieved
         }
         return nil
+    }
+
+    private func parsedUUID(from characteristic: CBCharacteristic) -> UUID? {
+        UUID(uuidString: characteristic.uuid.uuidString)
+    }
+
+    private func parsedUUID(from service: CBService) -> UUID? {
+        UUID(uuidString: service.uuid.uuidString)
+    }
+
+    private func parsedUUID(from cbuuid: CBUUID) -> UUID? {
+        UUID(uuidString: cbuuid.uuidString)
     }
 
     private func emitAvailability(_ state: CBManagerState) {
