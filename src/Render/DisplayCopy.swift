@@ -88,7 +88,7 @@ enum DisplayCopy {
     }
 
     static func formatCacheRate(_ rate: Double) -> String? {
-        guard rate.isFinite, rate >= 0 else {
+        guard rate.isFinite, rate >= 0, rate <= 1 else {
             return nil
         }
         let percent = roundHalfAwayFromZero(rate * 100)

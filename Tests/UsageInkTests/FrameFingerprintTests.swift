@@ -166,6 +166,79 @@ final class FrameFingerprintTests: XCTestCase {
         XCTAssertFalse(json.contains("Resets in"))
     }
 
+    func testEnabledCacheAndTPSValuesCoverageAndLookbackEnterFingerprint() throws {
+        var preferences = DisplayPreferences.default
+        preferences.modules.cache = true
+        preferences.modules.tps = true
+        let baseInput = DisplayFrameFixtures.input(preferences: preferences)
+        let document = FrameFingerprint.document(QuotaFocusModelBuilder.build(baseInput))
+        guard case .object(let root) = document, case .array(let visible) = root["visible"] else {
+            return XCTFail("visible")
+        }
+        XCTAssertEqual(root["tpsWindowMinutes"], .string("15"))
+        guard case .object(let modules) = root["modules"] else {
+            return XCTFail("modules")
+        }
+        XCTAssertEqual(modules["cache"], .bool(true))
+        XCTAssertEqual(modules["tps"], .bool(true))
+        XCTAssertEqual(root["localCoverageComplete"], .bool(true))
+        let cache = visible.first { value in
+            if case .object(let object) = value { return object["id"] == .string("local.cache") }
+            return false
+        }
+        let tps = visible.first { value in
+            if case .object(let object) = value { return object["id"] == .string("local.tps") }
+            return false
+        }
+        assertField(cache ?? .null, "value", .string("26%"))
+        assertField(cache ?? .null, "coverageComplete", .bool(true))
+        assertField(tps ?? .null, "value", .string("1.3"))
+
+        var lookback = preferences
+        lookback.tpsWindowMinutes = 3
+        let lookbackPrint = CanonicalJSON.stringify(
+            FrameFingerprint.document(QuotaFocusModelBuilder.build(DisplayFrameFixtures.input(preferences: lookback)))
+        )
+        XCTAssertNotEqual(CanonicalJSON.stringify(document), lookbackPrint)
+        XCTAssertTrue(lookbackPrint.contains("\"tpsWindowMinutes\":\"3\""))
+
+        let incomplete = LocalActivityObservation(
+            availability: .fresh,
+            failure: "sourcePartialTail",
+            todayTokens: 1_500,
+            weekTokens: 12_000,
+            cacheHitRate: 0.255,
+            tps: 1.25,
+            coverageComplete: false
+        )
+        let incompleteDocument = FrameFingerprint.document(
+            QuotaFocusModelBuilder.build(DisplayFrameFixtures.input(preferences: preferences, local: incomplete))
+        )
+        XCTAssertNotEqual(CanonicalJSON.stringify(document), CanonicalJSON.stringify(incompleteDocument))
+        guard case .object(let incompleteRoot) = incompleteDocument, case .array(let incompleteVisible) = incompleteRoot["visible"] else {
+            return XCTFail("incomplete visible")
+        }
+        let incompleteCache = incompleteVisible.first { value in
+            if case .object(let object) = value { return object["id"] == .string("local.cache") }
+            return false
+        }
+        assertField(incompleteCache ?? .null, "value", .null)
+        assertField(incompleteCache ?? .null, "coverageComplete", .bool(false))
+        XCTAssertEqual(incompleteRoot["localCoverageComplete"], .bool(false))
+
+        let unknownPrint = FrameFingerprint.document(
+            QuotaFocusModelBuilder.build(DisplayFrameFixtures.input(preferences: preferences, local: .unknown))
+        )
+        guard case .object(let unknownRoot) = unknownPrint, case .array(let unknownVisible) = unknownRoot["visible"] else {
+            return XCTFail("unknown visible")
+        }
+        let unknownTPS = unknownVisible.first { value in
+            if case .object(let object) = value { return object["id"] == .string("local.tps") }
+            return false
+        }
+        assertField(unknownTPS ?? .null, "value", .null)
+    }
+
     func testFingerprintIsLowercaseHexSHA256() throws {
         let fingerprint = try DisplayFrameComposer.compose(DisplayFrameFixtures.input()).fingerprint
         XCTAssertEqual(fingerprint.count, 64)

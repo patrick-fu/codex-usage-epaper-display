@@ -115,7 +115,14 @@ final class ActivityStore: @unchecked Sendable {
             limits: limits
         )
         if plan.status == .budgetExhausted {
-            return retainedObservation(prior: prior, failure: "sourceScanTimeout")
+            return retainedObservation(
+                prior: prior,
+                failure: "sourceScanTimeout",
+                now: now,
+                calendar: calendar,
+                pollStart: pollStart,
+                tpsWindowMinutes: tpsWindowMinutes
+            )
         }
         if !plan.rootsExisted {
             if prior.todayTokens == nil {
@@ -124,12 +131,26 @@ final class ActivityStore: @unchecked Sendable {
             return prior
         }
         if !plan.commitsResults {
-            return retainedObservation(prior: prior, failure: plan.failure ?? "unknown")
+            return retainedObservation(
+                prior: prior,
+                failure: plan.failure ?? "unknown",
+                now: now,
+                calendar: calendar,
+                pollStart: pollStart,
+                tpsWindowMinutes: tpsWindowMinutes
+            )
         }
         do {
             try apply(plan, now: now)
         } catch {
-            return retainedObservation(prior: prior, failure: "unknown")
+            return retainedObservation(
+                prior: prior,
+                failure: "unknown",
+                now: now,
+                calendar: calendar,
+                pollStart: pollStart,
+                tpsWindowMinutes: tpsWindowMinutes
+            )
         }
         guard let totals = try? queryTotals(
             now: now,
@@ -176,12 +197,31 @@ final class ActivityStore: @unchecked Sendable {
         return try loadFacts()
     }
 
-    private func retainedObservation(prior: LocalActivityObservation, failure: String) -> LocalActivityObservation {
+    private func retainedObservation(
+        prior: LocalActivityObservation,
+        failure: String,
+        now: Date,
+        calendar: Calendar,
+        pollStart: Date,
+        tpsWindowMinutes: Int
+    ) -> LocalActivityObservation {
         var retained = prior
         retained.failure = failure
         retained.coverageComplete = false
+        retained.cacheHitRate = nil
         if prior.todayTokens == nil {
             retained.availability = prior.availability == .unknown ? .unknown : .unavailable
+            return retained
+        }
+        if let totals = try? queryTotals(
+            now: now,
+            calendar: calendar,
+            pollStart: pollStart,
+            tpsWindowMinutes: tpsWindowMinutes
+        ) {
+            retained.todayTokens = totals.todayTokens
+            retained.weekTokens = totals.weekTokens
+            retained.tps = totals.tps(windowMinutes: tpsWindowMinutes)
         }
         return retained
     }
@@ -201,6 +241,7 @@ final class ActivityStore: @unchecked Sendable {
         var retained = prior
         retained.failure = prior.failure ?? "unknown"
         retained.coverageComplete = false
+        retained.cacheHitRate = nil
         return retained
     }
 

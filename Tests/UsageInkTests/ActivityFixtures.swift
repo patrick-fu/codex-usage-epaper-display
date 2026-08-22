@@ -75,6 +75,14 @@ enum ActivityFixtures {
         return url
     }
 
+    static func isoUTC(_ seconds: Int) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
+        return formatter.string(from: Date(timeIntervalSince1970: TimeInterval(seconds)))
+    }
+
     static func calendar(timeZone: TimeZone) -> Calendar {
         LocalActivityMetrics.isoCalendar(timeZone: timeZone)
     }

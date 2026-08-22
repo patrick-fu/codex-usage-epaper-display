@@ -103,6 +103,21 @@ final class TokenCountParserTests: XCTestCase {
         }
     }
 
+    func testMatchingCachedAliasesAreEquivalent() {
+        let line = """
+        {"timestamp":"2026-08-22T00:00:00.000Z","type":"event_msg","payload":{"type":"token_count","total_token_usage":{"input_tokens":20,"cache_read_input_tokens":5,"cache_read_tokens":5,"output_tokens":1}}}
+        """
+        switch TokenCountParser.parseLine(line, pollStart: poll) {
+        case .counters(_, let total):
+            XCTAssertEqual(total.cachedInput, 5)
+            XCTAssertEqual(total.input, 20)
+        case .ignored:
+            XCTFail("ignored")
+        case .malformed(let reason):
+            XCTFail("malformed \(reason)")
+        }
+    }
+
     func testCachedAliasMismatchIsMalformed() {
         let line = """
         {"timestamp":"2026-08-22T00:00:00.000Z","type":"event_msg","payload":{"type":"token_count","total_token_usage":{"input_tokens":8,"cached_input_tokens":1,"cache_read_tokens":2,"output_tokens":1}}}

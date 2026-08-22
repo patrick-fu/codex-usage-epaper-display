@@ -167,6 +167,9 @@ final class ActivityIngestionTests: XCTestCase {
         )
         XCTAssertEqual(rejected.todayTokens, 12)
         XCTAssertEqual(rejected.failure, "sourceMalformed")
+        XCTAssertNil(rejected.cacheHitRate)
+        XCTAssertEqual(rejected.tps, first.tps)
+        XCTAssertEqual(rejected.coverageComplete, false)
         XCTAssertEqual(try store.loadFactsForTests().count, 1)
         XCTAssertEqual(try store.loadFactsForTests().first?.inputDelta, 10)
     }
