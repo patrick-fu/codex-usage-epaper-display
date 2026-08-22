@@ -10,6 +10,40 @@ private func usageInkGetPath(
 ) -> Int32
 
 enum ActivityScanner {
+    private struct ScanCoverage {
+        var complete = true
+        var blockingFailure: String?
+        var sawPartialTail = false
+        var sawRollbackRebuild = false
+
+        mutating func note(_ code: String) {
+            complete = false
+            switch code {
+            case "sourcePartialTail":
+                sawPartialTail = true
+            case "sourceRollbackRebuild":
+                sawRollbackRebuild = true
+            default:
+                if blockingFailure == nil {
+                    blockingFailure = code
+                }
+            }
+        }
+
+        var failure: String? {
+            if let blockingFailure {
+                return blockingFailure
+            }
+            if sawPartialTail {
+                return "sourcePartialTail"
+            }
+            if sawRollbackRebuild {
+                return "sourceRollbackRebuild"
+            }
+            return nil
+        }
+    }
+
     static func scan(
         codexHome: URL,
         existingCursors: [String: SourceCursorRecord],
@@ -50,7 +84,7 @@ enum ActivityScanner {
         now: Date,
         budget: ScanBudget
     ) -> ActivityScanPlan {
-        var coverageComplete = true
+        var coverage = ScanCoverage()
         var failure: String?
         var rootsExisted = false
         var winners: [String: Candidate] = [:]
@@ -74,17 +108,20 @@ enum ActivityScanner {
                 )
             }
             let rootURL = codexHome.appendingPathComponent(layer.rawValue, isDirectory: true)
-            switch enumerate(rootURL: rootURL, layer: layer, budget: budget, coverageComplete: &coverageComplete, failure: &failure) {
+            switch enumerate(rootURL: rootURL, layer: layer, budget: budget, coverageComplete: &coverage.complete, failure: &failure) {
             case .missing:
                 continue
             case .rejected:
-                coverageComplete = false
                 rootsExisted = true
+                coverage.note(failure ?? "sourceUnreadable")
             case .candidates(let rootFd, let candidates):
                 if let previous = retainedRootFds.updateValue(rootFd, forKey: layer) {
                     close(previous)
                 }
                 rootsExisted = true
+                if let failure {
+                    coverage.note(failure)
+                }
                 for candidate in candidates {
                     mergeWinner(candidate, into: &winners)
                 }
@@ -132,8 +169,7 @@ enum ActivityScanner {
             }
             guard let candidate = winners[sourceKey] else { continue }
             guard let rootFd = retainedRootFds[candidate.layer] else {
-                coverageComplete = false
-                if failure == nil { failure = "sourceUnreadable" }
+                coverage.note("sourceUnreadable")
                 continue
             }
             let existing = existingCursors[sourceKey]
@@ -156,18 +192,15 @@ enum ActivityScanner {
                     rootsExisted: true
                 )
             case .rejected(let code):
-                coverageComplete = false
-                if failure == nil { failure = code }
+                coverage.note(code)
             case .ingested(let result):
                 if result.rebuild {
                     rebuilds.append(sourceKey)
                 }
                 if result.partial {
-                    coverageComplete = false
-                    if failure == nil { failure = result.failure ?? "sourcePartialTail" }
+                    coverage.note(result.failure ?? "sourcePartialTail")
                 } else if let code = result.failure {
-                    coverageComplete = false
-                    if failure == nil { failure = code }
+                    coverage.note(code)
                 }
                 facts.append(contentsOf: result.facts)
                 if let cursor = result.cursor {
@@ -178,8 +211,8 @@ enum ActivityScanner {
 
         return ActivityScanPlan(
             status: .committed,
-            coverageComplete: coverageComplete,
-            failure: coverageComplete ? nil : failure,
+            coverageComplete: coverage.complete,
+            failure: coverage.complete ? nil : coverage.failure,
             rebuildSourceKeys: rebuilds,
             facts: facts,
             cursors: cursors,
