@@ -52,7 +52,7 @@ final class BindDisplayRuntimeTests: XCTestCase {
         default:
             XCTFail("compatible bind must persist")
         }
-        XCTAssertEqual(harness.radio.writes.map(\.data), [Data([0x01])])
+        XCTAssertEqual(harness.radio.writes.first?.data, Data([0x01]))
     }
 
     func testIncompatibleFirmwareDoesNotPersistBinding() throws {

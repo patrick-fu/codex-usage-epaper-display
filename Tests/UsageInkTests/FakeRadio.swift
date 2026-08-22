@@ -5,13 +5,22 @@ enum BLETestFixtures {
     static let sampleConfig = Data([8, 7, 6, 5, 4, 3, 2, 1, 0xFF, 0, 1, 0, 1])
 }
 
-final class ManualDisplayClock: DisplayClock {
-    private var now: TimeInterval = 0
+final class ManualDisplayClock: DisplayClock, @unchecked Sendable {
+    private var elapsed: TimeInterval = 0
+    let origin: Date
     private var tasks: [String: (fireAt: TimeInterval, body: () -> Void)] = [:]
     var queue: DispatchQueue?
 
+    init(origin: Date = Date(timeIntervalSince1970: 0)) {
+        self.origin = origin
+    }
+
+    var date: Date {
+        origin.addingTimeInterval(elapsed)
+    }
+
     func schedule(id: String, after: TimeInterval, _ body: @escaping () -> Void) {
-        tasks[id] = (now + after, body)
+        tasks[id] = (elapsed + after, body)
     }
 
     func cancel(id: String) {
@@ -23,8 +32,8 @@ final class ManualDisplayClock: DisplayClock {
     }
 
     func advance(_ interval: TimeInterval) {
-        now += interval
-        let due = tasks.filter { $0.value.fireAt <= now }
+        elapsed += interval
+        let due = tasks.filter { $0.value.fireAt <= elapsed }
         for key in due.keys {
             tasks[key] = nil
         }

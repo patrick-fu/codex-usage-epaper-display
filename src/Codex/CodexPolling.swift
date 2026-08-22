@@ -6,6 +6,8 @@ struct CodexPollingDependencies {
     var now: () -> Date
     var resolve: (String?) -> Result<CodexResolvedBinary, CodexFailure>
     var poll: (String, String, @escaping (Result<CodexUsageSnapshot, CodexFailure>) -> Void) -> Void
+    // Runtime invalidates completions after sleep; live polling has no stronger cancellation primitive.
+    var cancel: () -> Void = {}
     var probeQueue: DispatchQueue = DispatchQueue(label: "com.patrickfu.UsageInk.codex.probe", qos: .utility)
 
     static func disabled(now: @escaping () -> Date = Date.init) -> CodexPollingDependencies {

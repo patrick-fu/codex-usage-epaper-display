@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C20A00000000000000000002 /* AutomatedRefreshRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20A00000000000000000001 /* AutomatedRefreshRuntimeTests.swift */; };
 		00F1A2EE774DFBFB3CC672B6 /* ActivityDiscoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDDF73ADD522FC5DA009BBC8 /* ActivityDiscoveryTests.swift */; };
 		01EB0888CCAA4EE0A5D4467F /* PlaneEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA852DBADF0DE4CBE8A55CA9 /* PlaneEncoder.swift */; };
 		C19E0001A2B3C4D5E6F70802 /* PlaneRLE.swift in Sources */ = {isa = PBXBuildFile; fileRef = C19E0001A2B3C4D5E6F70801 /* PlaneRLE.swift */; };
@@ -117,6 +118,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		C20A00000000000000000001 /* AutomatedRefreshRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomatedRefreshRuntimeTests.swift; sourceTree = "<group>"; };
 		04B7A4A6829A03C26D9133A8 /* TokenCountParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TokenCountParser.swift; sourceTree = "<group>"; };
 		0DC9DE31E8CEBDACFC0E4F4C /* ShellLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellLaunchTests.swift; sourceTree = "<group>"; };
 		17976445E391337829B66A8A /* DisplayCopyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayCopyTests.swift; sourceTree = "<group>"; };
@@ -257,6 +259,7 @@
 		4CBC83B3DCC30296E9AA46DB /* UsageInkTests */ = {
 			isa = PBXGroup;
 			children = (
+				C20A00000000000000000001 /* AutomatedRefreshRuntimeTests.swift */,
 				BDDF73ADD522FC5DA009BBC8 /* ActivityDiscoveryTests.swift */,
 				E6FF771439EF184173675380 /* ActivityFixtures.swift */,
 				A70D7FF0EF2D0BE22830288A /* ActivityFocusLayoutTests.swift */,
@@ -544,6 +547,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C20A00000000000000000002 /* AutomatedRefreshRuntimeTests.swift in Sources */,
 				00F1A2EE774DFBFB3CC672B6 /* ActivityDiscoveryTests.swift in Sources */,
 				F15C3FF9D77844FD0A499A36 /* ActivityFixtures.swift in Sources */,
 				D4CDA5A70A91A8573452CEF9 /* ActivityFocusLayoutTests.swift in Sources */,
