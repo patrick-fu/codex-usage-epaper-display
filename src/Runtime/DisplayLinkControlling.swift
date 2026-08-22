@@ -15,6 +15,13 @@ protocol DisplayLinkDelegate: AnyObject {
     func displayLinkDidDisconnect()
     func displayLinkDidUpdateReadyConfig(_ config: EPDConfig)
     func displayLinkDidFinishConfigWrite(succeeded: Bool)
+    func displayLinkDidCompleteRefresh()
+    func displayLinkDidFailRefresh(_ classification: BLEClassification)
+}
+
+extension DisplayLinkDelegate {
+    func displayLinkDidCompleteRefresh() {}
+    func displayLinkDidFailRefresh(_ classification: BLEClassification) {}
 }
 
 protocol DisplayLinkControlling: AnyObject {
@@ -27,6 +34,8 @@ protocol DisplayLinkControlling: AnyObject {
     func unbind()
     func cancelWork()
     func writeWakeupPin(_ pin: UInt8, sessionGeneration: UInt64, configDigest: Data) -> Bool
+    func transferDisplayFrame(blackPlane: Data, redPlane: Data, sessionGeneration: UInt64) -> Bool
+    func noteHostWillSleep()
 }
 
 final class NullDisplayLink: DisplayLinkControlling {
@@ -42,4 +51,10 @@ final class NullDisplayLink: DisplayLinkControlling {
     func writeWakeupPin(_ pin: UInt8, sessionGeneration: UInt64, configDigest: Data) -> Bool {
         false
     }
+
+    func transferDisplayFrame(blackPlane: Data, redPlane: Data, sessionGeneration: UInt64) -> Bool {
+        false
+    }
+
+    func noteHostWillSleep() {}
 }

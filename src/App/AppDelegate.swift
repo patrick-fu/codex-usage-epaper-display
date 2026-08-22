@@ -46,6 +46,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             runtime.submit(command)
         }
         runtime.start()
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(hostWillSleep),
+            name: NSWorkspace.willSleepNotification,
+            object: nil
+        )
+    }
+
+    @objc private func hostWillSleep() {
+        runtime.submit(.hostWillSleep)
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

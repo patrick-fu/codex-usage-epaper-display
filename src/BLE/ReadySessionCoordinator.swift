@@ -3,6 +3,23 @@ import Foundation
 private enum RadioWriteOperation {
     case initialize
     case setConfig(EPDConfig)
+    case planeFlush
+    case refreshOpcode
+    case retryInitialize
+}
+
+private struct TransferSession {
+    var generation: UInt64
+    var black: Data
+    var red: Data
+    var chunks: [PlannedImageChunk]
+    var index: Int
+    var retryUsed: Bool
+    var awaitingRetryHandshake: Bool
+    var retryInitAcked: Bool
+    var retryFreshMTU: Bool
+    var waitingForCredit: Bool
+    var observing: Bool
 }
 
 private struct InFlightWrite {
@@ -27,8 +44,10 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
     private var rleEnabled = false
     private var timeUnixSeconds: Int?
     private var sessionGeneration: UInt64 = 0
+    private var firmwareMTU = 0
     private var nextWriteOperationID: UInt64 = 0
     private var inFlightWrites: [InFlightWrite] = []
+    private var transfer: TransferSession?
 
     init(radio: RadioTransport, clock: DisplayClock) {
         self.radio = radio
@@ -98,6 +117,7 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
               current.digest == configDigest,
               let next = current.replacingWakeupPin(pin),
               next.differsOnlyByWakeupPin(from: current),
+              transfer == nil,
               !hasInFlightSetConfig
         else {
             return false
@@ -106,6 +126,29 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         payload.append(contentsOf: next.bytes)
         issueWrite(identifier: identifier, data: payload, operation: .setConfig(next))
         return true
+    }
+
+    func transferDisplayFrame(blackPlane: Data, redPlane: Data, sessionGeneration: UInt64) -> Bool {
+        guard link == .ready,
+              self.sessionGeneration == sessionGeneration,
+              activeIdentifier != nil,
+              transfer == nil else {
+            return false
+        }
+        guard firmwareMTU > 0 else {
+            fail(.mtuInvalid)
+            return false
+        }
+        return startImageTransfer(
+            blackPlane: blackPlane,
+            redPlane: redPlane,
+            sessionGeneration: sessionGeneration,
+            retryUsed: false
+        )
+    }
+
+    func noteHostWillSleep() {
+        failLiveSession(classification: .disconnected, linkState: idleLink())
     }
 
     func cancelWork() {
@@ -173,11 +216,19 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
             return
         }
         if link == .ready || activeIdentifier == identifier {
+            failTransfer(.disconnected)
             resetSession()
             classify(.disconnected)
             emitLink(idleLink())
             delegate?.displayLinkDidDisconnect()
         }
+    }
+
+    func radioIsReadyToSendWriteWithoutResponse(identifier: UUID) {
+        guard activeIdentifier == identifier, transfer?.waitingForCredit == true else {
+            return
+        }
+        pumpTransfer()
     }
 
     func radioDidDiscoverServices(identifier: UUID, services: [UUID]) {
@@ -261,12 +312,14 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         }
     }
 
-    func radioDidWrite(identifier: UUID, characteristic: UUID, failed: Bool) {
-        guard activeIdentifier == identifier, !inFlightWrites.isEmpty else {
+    func radioDidWrite(identifier: UUID, characteristic: UUID, failed: Bool, type: RadioWriteType) {
+        guard activeIdentifier == identifier, type == .withResponse else {
             return
         }
-        let completed = inFlightWrites.removeFirst()
-        switch completed.operation {
+        guard let completed = dequeueMatchingWithResponseWrite() else {
+            return
+        }
+        switch completed {
         case .initialize:
             if link == .initializing, failed {
                 fail(.initTimeout)
@@ -282,6 +335,30 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
             currentConfig = written
             delegate?.displayLinkDidUpdateReadyConfig(written)
             delegate?.displayLinkDidFinishConfigWrite(succeeded: true)
+        case .planeFlush:
+            if failed {
+                handleStillConnectedTransportFailure(isRefresh: false)
+                return
+            }
+            startPlaneTimer()
+            pumpTransfer()
+        case .refreshOpcode:
+            if failed {
+                handleStillConnectedTransportFailure(isRefresh: true)
+                return
+            }
+            beginObservation()
+        case .retryInitialize:
+            if failed {
+                fail(.initTimeout)
+                return
+            }
+            guard var work = transfer, work.awaitingRetryHandshake else {
+                return
+            }
+            work.retryInitAcked = true
+            transfer = work
+            _ = completeRetryWhenReady()
         }
     }
 
@@ -298,10 +375,10 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         resetSessionFlags()
         activeIdentifier = identifier
         emitLink(.connecting)
-        radio.connect(identifier: identifier)
         clock.schedule(id: "connect", after: 10) { [weak self] in
             self?.fail(.connectFailed)
         }
+        radio.connect(identifier: identifier)
     }
 
     private func handleFirmware(_ firmware: UInt8, identifier: UUID) {
@@ -332,14 +409,14 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         emitLink(.initializing)
         initGeneration += 1
         initGateOpen = true
+        clock.schedule(id: "init", after: 5) { [weak self] in
+            self?.fail(.initTimeout)
+        }
         issueWrite(
             identifier: activeIdentifier!,
             data: Data([DisplayLinkUUIDs.initOpcode]),
             operation: .initialize
         )
-        clock.schedule(id: "init", after: 5) { [weak self] in
-            self?.fail(.initTimeout)
-        }
     }
 
     private func handleMTUText(_ value: Data) {
@@ -351,6 +428,8 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         }
         if text.contains("rle=1") {
             rleEnabled = true
+        } else if text.contains("rle=") {
+            rleEnabled = false
         }
         if let time = parseTaggedInt(text, tag: "t=") {
             timeUnixSeconds = time
@@ -362,7 +441,17 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
             fail(.mtuInvalid)
             return
         }
+        firmwareMTU = mtu
+        if var work = transfer, work.awaitingRetryHandshake {
+            work.retryFreshMTU = true
+            transfer = work
+            _ = completeRetryWhenReady()
+            return
+        }
         clock.cancel(id: "init")
+        clock.cancel(id: "connect")
+        clock.cancel(id: "config")
+        clock.cancel(id: "scan")
         guard let identifier = activeIdentifier, let config = currentConfig else {
             fail(.unknown)
             return
@@ -392,6 +481,7 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
     }
 
     private func fail(_ classification: BLEClassification) {
+        failTransfer(classification)
         let identifier = activeIdentifier
         cancelTimers()
         radio.stopScan()
@@ -407,6 +497,7 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
     }
 
     private func failLiveSession(classification: BLEClassification, linkState: BLELinkState) {
+        failTransfer(classification)
         cancelTimers()
         radio.stopScan()
         if let activeIdentifier {
@@ -435,7 +526,213 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         currentConfig = nil
         rleEnabled = false
         timeUnixSeconds = nil
+        firmwareMTU = 0
+        transfer = nil
         inFlightWrites.removeAll()
+    }
+
+    private func pumpTransfer() {
+        guard var work = transfer, !work.observing, let identifier = activeIdentifier else {
+            return
+        }
+        work.waitingForCredit = false
+        while work.index < work.chunks.count {
+            let chunk = work.chunks[work.index]
+            if !chunk.withResponse && !radio.canSendWriteWithoutResponse(identifier: identifier) {
+                work.waitingForCredit = true
+                transfer = work
+                return
+            }
+            work.index += 1
+            transfer = work
+            if chunk.withResponse {
+                issueWrite(
+                    identifier: identifier,
+                    data: chunk.packet,
+                    operation: chunk.isRefresh ? .refreshOpcode : .planeFlush
+                )
+                return
+            }
+            radio.write(
+                identifier: identifier,
+                characteristic: DisplayLinkUUIDs.data,
+                data: chunk.packet,
+                type: .withoutResponse
+            )
+        }
+        transfer = work
+    }
+
+    private func startPlaneTimer() {
+        clock.cancel(id: "plane")
+        clock.schedule(id: "plane", after: 30) { [weak self] in
+            self?.handlePlaneTimeout()
+        }
+    }
+
+    private func handlePlaneTimeout() {
+        var isRefresh = false
+        if let work = transfer, work.index < work.chunks.count {
+            isRefresh = work.chunks[work.index].isRefresh
+        }
+        handleStillConnectedTransportFailure(isRefresh: isRefresh)
+    }
+
+    private func handleStillConnectedTransportFailure(isRefresh: Bool) {
+        guard transfer != nil else {
+            return
+        }
+        if beginSameSessionRetry() {
+            return
+        }
+        failTransfer(isRefresh ? .refreshTimeout : .planeTimeout)
+    }
+
+    private func beginSameSessionRetry() -> Bool {
+        guard var work = transfer, !work.retryUsed, !work.observing, let identifier = activeIdentifier else {
+            return false
+        }
+        work.retryUsed = true
+        work.index = 0
+        work.awaitingRetryHandshake = true
+        work.retryInitAcked = false
+        work.retryFreshMTU = false
+        work.waitingForCredit = false
+        work.observing = false
+        transfer = work
+        inFlightWrites.removeAll()
+        clock.cancel(id: "plane")
+        clock.cancel(id: "observation")
+        rleEnabled = false
+        timeUnixSeconds = nil
+        initGeneration += 1
+        initGateOpen = true
+        emitLink(.initializing)
+        classify(.planeTimeout)
+        clock.schedule(id: "init", after: 5) { [weak self] in
+            self?.fail(.initTimeout)
+        }
+        issueWrite(
+            identifier: identifier,
+            data: Data([DisplayLinkUUIDs.initOpcode]),
+            operation: .retryInitialize
+        )
+        return true
+    }
+
+    private func completeRetryWhenReady() -> Bool {
+        guard var work = transfer,
+              work.awaitingRetryHandshake,
+              work.retryInitAcked,
+              work.retryFreshMTU,
+              let identifier = activeIdentifier else {
+            return false
+        }
+        initGateOpen = false
+        clock.cancel(id: "init")
+        let capacity = currentChunkCapacity(identifier: identifier)
+        if capacity < 1 {
+            fail(.mtuInvalid)
+            return true
+        }
+        guard let planned = ImageTransferPlanner.plan(
+            black: work.black,
+            red: work.red,
+            rleAdvertised: rleEnabled,
+            chunkCapacity: capacity
+        ) else {
+            failTransfer(.unknown)
+            emitLink(.ready)
+            return true
+        }
+        work.chunks = planned.chunks
+        work.index = 0
+        work.awaitingRetryHandshake = false
+        transfer = work
+        emitLink(.ready)
+        startPlaneTimer()
+        pumpTransfer()
+        return true
+    }
+
+    private func currentChunkCapacity(identifier: UUID) -> Int {
+        ImageTransferPlanner.negotiatedCapacity(
+            firmwareMTU: firmwareMTU,
+            withoutResponseLimit: radio.maximumWriteValueLength(identifier: identifier, type: .withoutResponse),
+            withResponseLimit: radio.maximumWriteValueLength(identifier: identifier, type: .withResponse)
+        )
+    }
+
+    private func startImageTransfer(
+        blackPlane: Data,
+        redPlane: Data,
+        sessionGeneration: UInt64,
+        retryUsed: Bool
+    ) -> Bool {
+        let identifier = activeIdentifier!
+        let capacity = currentChunkCapacity(identifier: identifier)
+        if capacity < 1 {
+            fail(.mtuInvalid)
+            return false
+        }
+        guard let planned = ImageTransferPlanner.plan(
+            black: blackPlane,
+            red: redPlane,
+            rleAdvertised: rleEnabled,
+            chunkCapacity: capacity
+        ) else {
+            failTransfer(.unknown)
+            return false
+        }
+        transfer = TransferSession(
+            generation: sessionGeneration,
+            black: blackPlane,
+            red: redPlane,
+            chunks: planned.chunks,
+            index: 0,
+            retryUsed: retryUsed,
+            awaitingRetryHandshake: false,
+            retryInitAcked: false,
+            retryFreshMTU: false,
+            waitingForCredit: false,
+            observing: false
+        )
+        startPlaneTimer()
+        pumpTransfer()
+        return true
+    }
+
+    private func beginObservation() {
+        guard var work = transfer else {
+            return
+        }
+        clock.cancel(id: "plane")
+        clock.cancel(id: "init")
+        clock.cancel(id: "connect")
+        work.observing = true
+        transfer = work
+        clock.schedule(id: "observation", after: 15) { [weak self] in
+            self?.completeRefresh()
+        }
+    }
+
+    private func completeRefresh() {
+        guard transfer?.observing == true else {
+            return
+        }
+        transfer = nil
+        delegate?.displayLinkDidCompleteRefresh()
+    }
+
+    private func failTransfer(_ classification: BLEClassification) {
+        guard transfer != nil else {
+            return
+        }
+        transfer = nil
+        clock.cancel(id: "plane")
+        clock.cancel(id: "observation")
+        classify(classification)
+        delegate?.displayLinkDidFailRefresh(classification)
     }
 
     private var hasInFlightSetConfig: Bool {
@@ -445,6 +742,18 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
             }
             return false
         }
+    }
+
+    private func dequeueMatchingWithResponseWrite() -> RadioWriteOperation? {
+        guard let index = inFlightWrites.firstIndex(where: { write in
+            switch write.operation {
+            case .initialize, .retryInitialize, .planeFlush, .refreshOpcode, .setConfig:
+                return true
+            }
+        }) else {
+            return nil
+        }
+        return inFlightWrites.remove(at: index).operation
     }
 
     private func issueWrite(identifier: UUID, data: Data, operation: RadioWriteOperation) {

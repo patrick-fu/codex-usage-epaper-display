@@ -69,8 +69,12 @@ final class FakeRadio: RadioTransport {
     private(set) var writes: [BLEWriteRecord] = []
     private(set) var scanActive = false
     var holdWriteAcknowledgements = false
+    var maximumWriteWithoutResponse = 512
+    var maximumWriteWithResponse = 512
+    var writeWithoutResponseCredits: Int?
+    private(set) var writesRejectedForFlowControl = 0
     private var connected: UUID?
-    private var deferredWriteAcks: [(identifier: UUID, characteristic: UUID, failed: Bool)] = []
+    private var deferredWriteAcks: [(identifier: UUID, characteristic: UUID, failed: Bool, type: RadioWriteType)] = []
 
     func start() {
         emit { self.delegate?.radioDidChangeAvailability(self.availability) }
@@ -157,7 +161,44 @@ final class FakeRadio: RadioTransport {
         }
     }
 
+    func maximumWriteValueLength(identifier: UUID, type: RadioWriteType) -> Int {
+        _ = identifier
+        return type == .withResponse ? maximumWriteWithResponse : maximumWriteWithoutResponse
+    }
+
+    func canSendWriteWithoutResponse(identifier: UUID) -> Bool {
+        _ = identifier
+        guard let credits = writeWithoutResponseCredits else {
+            return true
+        }
+        return credits > 0
+    }
+
+    func grantWriteWithoutResponseCredit() {
+        writeWithoutResponseCredits = (writeWithoutResponseCredits ?? 0) + 1
+        if let connected {
+            emit { self.delegate?.radioIsReadyToSendWriteWithoutResponse(identifier: connected) }
+        }
+    }
+
+    func setUnlimitedWriteWithoutResponse() {
+        writeWithoutResponseCredits = nil
+        if let connected {
+            emit { self.delegate?.radioIsReadyToSendWriteWithoutResponse(identifier: connected) }
+        }
+    }
+
+    func dropDeferredWriteAcknowledgements() {
+        deferredWriteAcks.removeAll()
+    }
+
     func write(identifier: UUID, characteristic: UUID, data: Data, type: RadioWriteType) {
+        if type == .withoutResponse, !canSendWriteWithoutResponse(identifier: identifier) {
+            writesRejectedForFlowControl += 1
+        }
+        if type == .withoutResponse, let credits = writeWithoutResponseCredits, credits > 0 {
+            writeWithoutResponseCredits = credits - 1
+        }
         writes.append(
             BLEWriteRecord(
                 identifier: identifier,
@@ -172,11 +213,16 @@ final class FakeRadio: RadioTransport {
             emitValue(identifier: identifier, characteristic: DisplayLinkUUIDs.data, value: Data(text.utf8))
         }
         if holdWriteAcknowledgements, type == .withResponse {
-            deferredWriteAcks.append((identifier, characteristic, failed))
+            deferredWriteAcks.append((identifier, characteristic, failed, type))
             return
         }
         emit {
-            self.delegate?.radioDidWrite(identifier: identifier, characteristic: characteristic, failed: failed)
+            self.delegate?.radioDidWrite(
+                identifier: identifier,
+                characteristic: characteristic,
+                failed: failed,
+                type: type
+            )
         }
         if spec?.mtuBeforeWriteAck != true, !failed, let text = spec?.autoMTUText {
             emitValue(identifier: identifier, characteristic: DisplayLinkUUIDs.data, value: Data(text.utf8))
@@ -192,7 +238,8 @@ final class FakeRadio: RadioTransport {
             self.delegate?.radioDidWrite(
                 identifier: ack.identifier,
                 characteristic: ack.characteristic,
-                failed: ack.failed
+                failed: ack.failed,
+                type: ack.type
             )
         }
         if ack.failed {
