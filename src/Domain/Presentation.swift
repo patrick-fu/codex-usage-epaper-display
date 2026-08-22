@@ -57,6 +57,22 @@ struct StatusSummaryFormatter: Sendable, Equatable {
         bleLink: BLELinkState = .unbound,
         classification: BLEClassification? = nil
     ) -> String {
+        summary(
+            account: AccountObservation(availability: .unknown, failure: nil, planType: nil, windows: []),
+            local: local,
+            displayUnavailable: displayUnavailable,
+            bleLink: bleLink,
+            classification: classification
+        )
+    }
+
+    func summary(
+        account: AccountObservation,
+        local: SourceAvailability,
+        displayUnavailable: Bool,
+        bleLink: BLELinkState = .unbound,
+        classification: BLEClassification? = nil
+    ) -> String {
         var parts = [accountText(account), localText(local)]
         if let linkText = bleLink.menuText(language: language) {
             parts.append(linkText)
@@ -74,11 +90,33 @@ struct StatusSummaryFormatter: Sendable, Equatable {
         return parts.joined(separator: " · ")
     }
 
-    private func accountText(_ availability: SourceAvailability) -> String {
-        switch availability {
-        case .unknown:
+    private func accountText(_ account: AccountObservation) -> String {
+        switch account.failure {
+        case "authRequired":
+            return localized("Sign in to Codex", "请在 Codex 登录")
+        case "binaryMissing":
+            return localized("Codex not found", "未找到 Codex")
+        case "versionTooOld":
+            return localized("Update Codex", "请升级 Codex")
+        case "protocolIncompatible":
+            return localized("Codex incompatible", "Codex 协议不兼容")
+        case "rateLimitUnavailable":
+            return localized("Quota unavailable", "限额暂不可用")
+        default:
+            break
+        }
+        switch account.availability {
+        case .authRequired:
+            return localized("Sign in to Codex", "请在 Codex 登录")
+        case .stale:
+            return localized("Account data stale", "账户数据已过期")
+        case .unknown, .fresh, .unavailable:
             return "—"
         }
+    }
+
+    private func localized(_ english: String, _ chinese: String) -> String {
+        language == .english ? english : chinese
     }
 
     private func localText(_ availability: SourceAvailability) -> String {

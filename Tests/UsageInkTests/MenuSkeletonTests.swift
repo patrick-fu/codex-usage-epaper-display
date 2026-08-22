@@ -99,7 +99,7 @@ final class MenuSkeletonTests: XCTestCase {
 
     func testEnglishUnknownSourcesUseSpecCopy() {
         let text = StatusSummaryFormatter(language: .english).summary(
-            account: .unknown,
+            account: SourceAvailability.unknown,
             local: .unknown,
             displayUnavailable: false
         )
@@ -108,7 +108,7 @@ final class MenuSkeletonTests: XCTestCase {
 
     func testSimplifiedChineseUnknownSourcesUseSpecCopy() {
         let text = StatusSummaryFormatter(language: .simplifiedChinese).summary(
-            account: .unknown,
+            account: SourceAvailability.unknown,
             local: .unknown,
             displayUnavailable: true
         )
