@@ -122,7 +122,7 @@ final class ManualRefreshRuntimeTests: XCTestCase {
         harness.radio.dropDeferredWriteAcknowledgements()
         harness.clock.advance(30)
         waitUntil { harness.box.snapshot?.bleLink == .initializing }
-        harness.radio.dropDeferredWriteAcknowledgements()
+        harness.radio.acknowledgeNextWrite()
         harness.radio.emitValue(
             identifier: desk,
             characteristic: DisplayLinkUUIDs.data,

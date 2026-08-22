@@ -15,7 +15,9 @@ private struct TransferSession {
     var chunks: [PlannedImageChunk]
     var index: Int
     var retryUsed: Bool
-    var awaitingRetryMTU: Bool
+    var awaitingRetryHandshake: Bool
+    var retryInitAcked: Bool
+    var retryFreshMTU: Bool
     var waitingForCredit: Bool
     var observing: Bool
 }
@@ -310,12 +312,14 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         }
     }
 
-    func radioDidWrite(identifier: UUID, characteristic: UUID, failed: Bool) {
-        guard activeIdentifier == identifier, !inFlightWrites.isEmpty else {
+    func radioDidWrite(identifier: UUID, characteristic: UUID, failed: Bool, type: RadioWriteType) {
+        guard activeIdentifier == identifier, type == .withResponse else {
             return
         }
-        let completed = inFlightWrites.removeFirst()
-        switch completed.operation {
+        guard let completed = dequeueMatchingWithResponseWrite() else {
+            return
+        }
+        switch completed {
         case .initialize:
             if link == .initializing, failed {
                 fail(.initTimeout)
@@ -347,7 +351,14 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         case .retryInitialize:
             if failed {
                 fail(.initTimeout)
+                return
             }
+            guard var work = transfer, work.awaitingRetryHandshake else {
+                return
+            }
+            work.retryInitAcked = true
+            transfer = work
+            _ = completeRetryWhenReady()
         }
     }
 
@@ -417,6 +428,8 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         }
         if text.contains("rle=1") {
             rleEnabled = true
+        } else if text.contains("rle=") {
+            rleEnabled = false
         }
         if let time = parseTaggedInt(text, tag: "t=") {
             timeUnixSeconds = time
@@ -428,14 +441,17 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
             fail(.mtuInvalid)
             return
         }
+        firmwareMTU = mtu
+        if var work = transfer, work.awaitingRetryHandshake {
+            work.retryFreshMTU = true
+            transfer = work
+            _ = completeRetryWhenReady()
+            return
+        }
         clock.cancel(id: "init")
         clock.cancel(id: "connect")
         clock.cancel(id: "config")
         clock.cancel(id: "scan")
-        firmwareMTU = mtu
-        if completeRetryAfterFreshMTU() {
-            return
-        }
         guard let identifier = activeIdentifier, let config = currentConfig else {
             fail(.unknown)
             return
@@ -578,7 +594,9 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         }
         work.retryUsed = true
         work.index = 0
-        work.awaitingRetryMTU = true
+        work.awaitingRetryHandshake = true
+        work.retryInitAcked = false
+        work.retryFreshMTU = false
         work.waitingForCredit = false
         work.observing = false
         transfer = work
@@ -602,11 +620,16 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         return true
     }
 
-    private func completeRetryAfterFreshMTU() -> Bool {
-        guard var work = transfer, work.awaitingRetryMTU, let identifier = activeIdentifier else {
+    private func completeRetryWhenReady() -> Bool {
+        guard var work = transfer,
+              work.awaitingRetryHandshake,
+              work.retryInitAcked,
+              work.retryFreshMTU,
+              let identifier = activeIdentifier else {
             return false
         }
         initGateOpen = false
+        clock.cancel(id: "init")
         let capacity = currentChunkCapacity(identifier: identifier)
         if capacity < 1 {
             fail(.mtuInvalid)
@@ -624,7 +647,7 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         }
         work.chunks = planned.chunks
         work.index = 0
-        work.awaitingRetryMTU = false
+        work.awaitingRetryHandshake = false
         transfer = work
         emitLink(.ready)
         startPlaneTimer()
@@ -668,7 +691,9 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
             chunks: planned.chunks,
             index: 0,
             retryUsed: retryUsed,
-            awaitingRetryMTU: false,
+            awaitingRetryHandshake: false,
+            retryInitAcked: false,
+            retryFreshMTU: false,
             waitingForCredit: false,
             observing: false
         )
@@ -717,6 +742,18 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
             }
             return false
         }
+    }
+
+    private func dequeueMatchingWithResponseWrite() -> RadioWriteOperation? {
+        guard let index = inFlightWrites.firstIndex(where: { write in
+            switch write.operation {
+            case .initialize, .retryInitialize, .planeFlush, .refreshOpcode, .setConfig:
+                return true
+            }
+        }) else {
+            return nil
+        }
+        return inFlightWrites.remove(at: index).operation
     }
 
     private func issueWrite(identifier: UUID, data: Data, operation: RadioWriteOperation) {

@@ -74,7 +74,7 @@ final class FakeRadio: RadioTransport {
     var writeWithoutResponseCredits: Int?
     private(set) var writesRejectedForFlowControl = 0
     private var connected: UUID?
-    private var deferredWriteAcks: [(identifier: UUID, characteristic: UUID, failed: Bool)] = []
+    private var deferredWriteAcks: [(identifier: UUID, characteristic: UUID, failed: Bool, type: RadioWriteType)] = []
 
     func start() {
         emit { self.delegate?.radioDidChangeAvailability(self.availability) }
@@ -213,11 +213,16 @@ final class FakeRadio: RadioTransport {
             emitValue(identifier: identifier, characteristic: DisplayLinkUUIDs.data, value: Data(text.utf8))
         }
         if holdWriteAcknowledgements, type == .withResponse {
-            deferredWriteAcks.append((identifier, characteristic, failed))
+            deferredWriteAcks.append((identifier, characteristic, failed, type))
             return
         }
         emit {
-            self.delegate?.radioDidWrite(identifier: identifier, characteristic: characteristic, failed: failed)
+            self.delegate?.radioDidWrite(
+                identifier: identifier,
+                characteristic: characteristic,
+                failed: failed,
+                type: type
+            )
         }
         if spec?.mtuBeforeWriteAck != true, !failed, let text = spec?.autoMTUText {
             emitValue(identifier: identifier, characteristic: DisplayLinkUUIDs.data, value: Data(text.utf8))
@@ -233,7 +238,8 @@ final class FakeRadio: RadioTransport {
             self.delegate?.radioDidWrite(
                 identifier: ack.identifier,
                 characteristic: ack.characteristic,
-                failed: ack.failed
+                failed: ack.failed,
+                type: ack.type
             )
         }
         if ack.failed {

@@ -242,6 +242,183 @@ final class DisplayRefreshTransportTests: XCTestCase {
         XCTAssertTrue(harness.completed)
     }
 
+    func testSameSessionRetryWaitsForFreshMTUThenInitAck() {
+        let harness = RefreshHarness()
+        harness.radio.maximumWriteWithoutResponse = 20
+        harness.radio.maximumWriteWithResponse = 20
+        bindReady(harness, rle: false)
+        harness.radio.peripherals[desk]?.autoMTUText = nil
+        harness.radio.holdWriteAcknowledgements = true
+        XCTAssertTrue(
+            harness.coordinator.transferDisplayFrame(
+                blackPlane: Data(repeating: 0x00, count: 15_000),
+                redPlane: Data(repeating: 0xFF, count: 15_000),
+                sessionGeneration: harness.session!.generation
+            )
+        )
+        harness.radio.dropDeferredWriteAcknowledgements()
+        let writesBeforeRetry = harness.radio.writes.count
+        harness.clock.advance(30)
+        XCTAssertEqual(harness.link, .initializing)
+        XCTAssertEqual(harness.radio.writes.last?.data, Data([DisplayLinkUUIDs.initOpcode]))
+        harness.radio.emitValue(
+            identifier: desk,
+            characteristic: DisplayLinkUUIDs.data,
+            value: Data("mtu=185 rle=1 t=9".utf8)
+        )
+        XCTAssertEqual(harness.link, .initializing)
+        XCTAssertEqual(harness.radio.writes.count, writesBeforeRetry + 1)
+        XCTAssertFalse(
+            harness.radio.writes.dropFirst(writesBeforeRetry + 1).contains {
+                $0.opcode == DisplayLinkUUIDs.writeImageOpcode
+            }
+        )
+        harness.radio.holdWriteAcknowledgements = false
+        harness.radio.acknowledgeNextWrite()
+        XCTAssertEqual(harness.link, .ready)
+        let retryWrites = Array(harness.radio.writes.dropFirst(writesBeforeRetry + 1))
+        XCTAssertTrue(retryWrites.contains { $0.opcode == DisplayLinkUUIDs.writeImageOpcode })
+        XCTAssertEqual(retryWrites.last?.data, Data([DisplayLinkUUIDs.refreshOpcode]))
+        XCTAssertTrue(retryWrites.last?.withResponse ?? false)
+        let decoded = try! decodeImageWrites(retryWrites, expectedCapacity: 18)
+        XCTAssertEqual(decoded.black.count, 15_000)
+        XCTAssertEqual(decoded.red.count, 15_000)
+        XCTAssertTrue(decoded.usedRLE)
+        XCTAssertTrue(decoded.blackFlushWithResponse)
+        XCTAssertTrue(decoded.redFlushWithResponse)
+        XCTAssertFalse(harness.completed)
+        harness.clock.advance(15)
+        XCTAssertTrue(harness.completed)
+    }
+
+    func testWithoutResponseWritesDoNotCompleteWithResponseFIFO() {
+        let harness = RefreshHarness()
+        harness.radio.maximumWriteWithoutResponse = 20
+        harness.radio.maximumWriteWithResponse = 20
+        bindReady(harness, rle: false)
+        harness.radio.holdWriteAcknowledgements = true
+        XCTAssertTrue(
+            harness.coordinator.transferDisplayFrame(
+                blackPlane: Data(repeating: 0x00, count: 15_000),
+                redPlane: Data(repeating: 0xFF, count: 15_000),
+                sessionGeneration: harness.session!.generation
+            )
+        )
+
+        let blackWrites = Array(harness.radio.writes.dropFirst())
+        let withoutResponseCount = blackWrites.filter { !$0.withResponse }.count
+        XCTAssertGreaterThan(withoutResponseCount, 50)
+        XCTAssertEqual(blackWrites.last?.withResponse, true)
+        XCTAssertEqual(blackWrites.last?.opcode, DisplayLinkUUIDs.writeImageOpcode)
+        XCTAssertFalse(blackWrites.contains { $0.opcode == DisplayLinkUUIDs.refreshOpcode })
+        let writesAfterBlackFlush = harness.radio.writes.count
+
+        for _ in 0..<withoutResponseCount {
+            harness.coordinator.radioDidWrite(
+                identifier: desk,
+                characteristic: DisplayLinkUUIDs.data,
+                failed: false,
+                type: .withoutResponse
+            )
+        }
+        XCTAssertEqual(harness.radio.writes.count, writesAfterBlackFlush)
+        XCTAssertFalse(harness.radio.writes.contains { $0.opcode == DisplayLinkUUIDs.refreshOpcode })
+
+        harness.radio.acknowledgeNextWrite()
+        XCTAssertGreaterThan(harness.radio.writes.count, writesAfterBlackFlush)
+        let redWrites = Array(harness.radio.writes.dropFirst(writesAfterBlackFlush))
+        XCTAssertTrue(redWrites.contains { $0.opcode == DisplayLinkUUIDs.writeImageOpcode && !$0.withResponse })
+        XCTAssertEqual(harness.radio.writes.last?.withResponse, true)
+        XCTAssertEqual(harness.radio.writes.last?.opcode, DisplayLinkUUIDs.writeImageOpcode)
+        XCTAssertFalse(harness.radio.writes.contains { $0.opcode == DisplayLinkUUIDs.refreshOpcode })
+        let writesAfterRedFlush = harness.radio.writes.count
+
+        for _ in 0..<withoutResponseCount {
+            harness.coordinator.radioDidWrite(
+                identifier: desk,
+                characteristic: DisplayLinkUUIDs.data,
+                failed: false,
+                type: .withoutResponse
+            )
+        }
+        XCTAssertEqual(harness.radio.writes.count, writesAfterRedFlush)
+        XCTAssertFalse(harness.radio.writes.contains { $0.opcode == DisplayLinkUUIDs.refreshOpcode })
+
+        harness.radio.acknowledgeNextWrite()
+        XCTAssertEqual(harness.radio.writes.last?.data, Data([DisplayLinkUUIDs.refreshOpcode]))
+        XCTAssertTrue(harness.radio.writes.last?.withResponse ?? false)
+        XCTAssertFalse(harness.completed)
+
+        for _ in 0..<withoutResponseCount {
+            harness.coordinator.radioDidWrite(
+                identifier: desk,
+                characteristic: DisplayLinkUUIDs.data,
+                failed: false,
+                type: .withoutResponse
+            )
+        }
+        XCTAssertFalse(harness.completed)
+        XCTAssertEqual(harness.radio.writes.last?.data, Data([DisplayLinkUUIDs.refreshOpcode]))
+
+        harness.radio.acknowledgeNextWrite()
+        XCTAssertFalse(harness.completed)
+        harness.clock.advance(15)
+        XCTAssertTrue(harness.completed)
+        XCTAssertNil(harness.failed)
+    }
+
+    func testSameSessionRetryFreshAdvertisementWithoutRLEUsesRaw() {
+        let harness = RefreshHarness()
+        harness.radio.maximumWriteWithoutResponse = 20
+        harness.radio.maximumWriteWithResponse = 20
+        bindReady(harness, rle: true)
+        harness.radio.peripherals[desk]?.autoMTUText = nil
+        harness.radio.holdWriteAcknowledgements = true
+        XCTAssertTrue(
+            harness.coordinator.transferDisplayFrame(
+                blackPlane: Data(repeating: 0x00, count: 15_000),
+                redPlane: Data(repeating: 0xFF, count: 15_000),
+                sessionGeneration: harness.session!.generation
+            )
+        )
+        XCTAssertTrue(
+            harness.radio.writes.contains {
+                $0.opcode == DisplayLinkUUIDs.writeImageOpcode
+                    && $0.data.count > 1
+                    && $0.data[1] & DisplayLinkUUIDs.writeImageFlagRLE != 0
+            }
+        )
+        harness.radio.dropDeferredWriteAcknowledgements()
+        let writesBeforeRetry = harness.radio.writes.count
+        harness.clock.advance(30)
+        XCTAssertEqual(harness.link, .initializing)
+        harness.radio.acknowledgeNextWrite()
+        XCTAssertEqual(harness.radio.writes.count, writesBeforeRetry + 1)
+        XCTAssertFalse(
+            harness.radio.writes.dropFirst(writesBeforeRetry + 1).contains {
+                $0.opcode == DisplayLinkUUIDs.writeImageOpcode
+            }
+        )
+        harness.radio.holdWriteAcknowledgements = false
+        harness.radio.emitValue(
+            identifier: desk,
+            characteristic: DisplayLinkUUIDs.data,
+            value: Data("mtu=185 rle=0 t=9".utf8)
+        )
+        XCTAssertEqual(harness.link, .ready)
+        let retryWrites = Array(harness.radio.writes.dropFirst(writesBeforeRetry + 1))
+        XCTAssertTrue(retryWrites.contains { $0.opcode == DisplayLinkUUIDs.writeImageOpcode })
+        let decoded = try! decodeImageWrites(retryWrites, expectedCapacity: 18)
+        XCTAssertFalse(decoded.usedRLE)
+        XCTAssertEqual(decoded.black.count, 15_000)
+        XCTAssertEqual(decoded.red.count, 15_000)
+        for write in retryWrites where write.opcode == DisplayLinkUUIDs.writeImageOpcode {
+            XCTAssertEqual(write.data[1] & DisplayLinkUUIDs.writeImageFlagRLE, 0)
+        }
+        harness.clock.advance(15)
+        XCTAssertTrue(harness.completed)
+    }
+
     func testRetryExhaustedFailsTransferAndKeepsNoSuccess() {
         let harness = RefreshHarness()
         harness.radio.maximumWriteWithoutResponse = 20
@@ -258,12 +435,7 @@ final class DisplayRefreshTransportTests: XCTestCase {
         harness.radio.dropDeferredWriteAcknowledgements()
         harness.clock.advance(30)
         XCTAssertEqual(harness.link, .initializing)
-        harness.radio.dropDeferredWriteAcknowledgements()
-        harness.radio.emitValue(
-            identifier: desk,
-            characteristic: DisplayLinkUUIDs.data,
-            value: Data("mtu=185".utf8)
-        )
+        harness.radio.acknowledgeNextWrite()
         XCTAssertEqual(harness.link, .ready)
         harness.radio.dropDeferredWriteAcknowledgements()
         harness.clock.advance(30)

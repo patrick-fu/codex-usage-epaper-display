@@ -19,7 +19,7 @@ protocol RadioTransportDelegate: AnyObject {
         failed: Bool
     )
     func radioDidUpdateValue(identifier: UUID, characteristic: UUID, value: Data)
-    func radioDidWrite(identifier: UUID, characteristic: UUID, failed: Bool)
+    func radioDidWrite(identifier: UUID, characteristic: UUID, failed: Bool, type: RadioWriteType)
     func radioIsReadyToSendWriteWithoutResponse(identifier: UUID)
 }
 

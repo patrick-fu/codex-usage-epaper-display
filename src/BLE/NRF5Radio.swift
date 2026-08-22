@@ -93,13 +93,13 @@ final class NRF5Radio: NSObject, RadioTransport, CBCentralManagerDelegate, CBPer
     func write(identifier: UUID, characteristic: UUID, data: Data, type: RadioWriteType) {
         guard let peripheral = storedPeripheral(identifier),
               let cbCharacteristic = characteristics[identifier]?[characteristic] else {
-            delegate?.radioDidWrite(identifier: identifier, characteristic: characteristic, failed: true)
+            delegate?.radioDidWrite(identifier: identifier, characteristic: characteristic, failed: true, type: type)
             return
         }
         let writeType: CBCharacteristicWriteType = type == .withResponse ? .withResponse : .withoutResponse
         peripheral.writeValue(data, for: cbCharacteristic, type: writeType)
         if writeType == .withoutResponse {
-            delegate?.radioDidWrite(identifier: identifier, characteristic: characteristic, failed: false)
+            delegate?.radioDidWrite(identifier: identifier, characteristic: characteristic, failed: false, type: .withoutResponse)
         }
     }
 
@@ -202,7 +202,7 @@ final class NRF5Radio: NSObject, RadioTransport, CBCentralManagerDelegate, CBPer
         guard let uuid = parsedUUID(from: characteristic) else {
             return
         }
-        delegate?.radioDidWrite(identifier: peripheral.identifier, characteristic: uuid, failed: error != nil)
+        delegate?.radioDidWrite(identifier: peripheral.identifier, characteristic: uuid, failed: error != nil, type: .withResponse)
     }
 
     private func storedPeripheral(_ identifier: UUID) -> CBPeripheral? {
