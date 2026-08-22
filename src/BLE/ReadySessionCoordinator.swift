@@ -770,7 +770,9 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
     }
 
     private func cancelTimers() {
-        clock.cancelAll()
+        for id in ["scan", "connect", "config", "init", "plane", "observation"] {
+            clock.cancel(id: id)
+        }
     }
 
     private func emitLink(_ state: BLELinkState) {

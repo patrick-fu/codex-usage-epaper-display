@@ -140,6 +140,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
                 if needsPollForEnabledSources {
                     startPoll()
                 } else {
+                    resetPollDeadline(from: now())
                     ensureRecovery()
                     processRefreshRequest()
                 }
@@ -214,6 +215,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
 
     func displayLinkDidBecomeReady(_ session: ReadyBLESession) {
         dispatchPrecondition(condition: .onQueue(queue))
+        let isFirstUsableBinding = persistedBindingIdentifier == nil
         let record = BoundDisplayRecord(
             identifier: session.identifier.uuidString,
             displayName: ProductState.sanitizedDisplayName(session.advertisedName)
@@ -237,7 +239,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             link.confirmBoundIdentity(session.identifier)
             // A first usable binding owns an initial full frame, even with degraded data.
             automaticRefreshPending = true
-            if !pollRunning {
+            if isFirstUsableBinding, !pollRunning {
                 startPoll()
             }
             processRefreshRequest()
@@ -298,7 +300,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         queuedAutomaticAfterTransfer = false
         if queuedManualAfterTransfer {
             queuedManualAfterTransfer = false
-            requestManualRefresh()
+            requestManualRefresh(resetDeadline: false)
         } else {
             processRefreshRequest()
         }
@@ -320,7 +322,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         queuedAutomaticAfterTransfer = false
         if queuedManualAfterTransfer {
             queuedManualAfterTransfer = false
-            requestManualRefresh()
+            requestManualRefresh(resetDeadline: false)
         } else {
             processRefreshRequest()
         }
@@ -335,6 +337,12 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             bleLink = .disconnected
         }
         panelTrust = .invalid
+        if persistedBindingIdentifier != nil {
+            automaticRefreshPending = true
+            if !sleeping {
+                ensureRecovery()
+            }
+        }
         publish()
     }
 
@@ -502,7 +510,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
                     fallbackInput: fallbackCompositionInput(preferences: productState.preferences)
                 )
                 automaticRefreshPending = true
-                processRefreshRequest()
+                processRefreshRequest(allowAutomaticPoll: false)
             }
         } catch PersistenceError.readOnlyUnsupportedSchema {
             notePersistenceFailure(.readOnlyUnsupportedSchema)
@@ -607,9 +615,11 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         )
     }
 
-    private func requestManualRefresh() {
+    private func requestManualRefresh(resetDeadline: Bool = true) {
         dispatchPrecondition(condition: .onQueue(queue))
-        resetPollDeadline(from: now())
+        if resetDeadline {
+            resetPollDeadline(from: now())
+        }
         if transferActive {
             queuedManualAfterTransfer = true
             return
@@ -620,7 +630,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         }
         pollAttempted = false
         pollTerminal = false
-        startPoll()
+        startPoll(resetDeadline: false)
         processRefreshRequest()
     }
 
@@ -642,16 +652,16 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             || (localEnabled && localActivity.availability != .fresh)
     }
 
-    private func processRefreshRequest() {
+    private func processRefreshRequest(allowAutomaticPoll: Bool = true) {
         dispatchPrecondition(condition: .onQueue(queue))
         guard hasRefreshRequest, !transferActive, !sleeping else {
             return
         }
         if manualRefreshPending && !pollTerminal {
-            startPoll()
+            startPoll(resetDeadline: false)
             return
         }
-        if needsPollForEnabledSources && !pollAttempted {
+        if allowAutomaticPoll, needsPollForEnabledSources, !pollAttempted {
             startPoll()
             return
         }
@@ -662,6 +672,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             return
         }
         do {
+            compositionSession.pendingAutomatic = nil
             let frame = try DisplayCompositionCoordinator.beginInFlight(
                 session: &compositionSession,
                 input: fallbackCompositionInput(preferences: productState.preferences)
@@ -713,7 +724,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         }
     }
 
-    private func startPoll() {
+    private func startPoll(resetDeadline: Bool = true) {
         dispatchPrecondition(condition: .onQueue(queue))
         guard !sleeping else {
             return
@@ -722,7 +733,9 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             return
         }
         let start = now()
-        resetPollDeadline(from: start)
+        if resetDeadline {
+            resetPollDeadline(from: start)
+        }
         pollAttempted = true
         pollTerminal = false
         pollRunning = true
@@ -884,7 +897,8 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
     }
 
     private func ensureRecovery() {
-        guard hasRefreshRequest,
+        guard !sleeping,
+              hasRefreshRequest,
               let identifier = persistedBindingIdentifier,
               bleLink != .ready,
               bleLink != .scanning,

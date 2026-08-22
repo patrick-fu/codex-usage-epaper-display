@@ -6,6 +6,7 @@ enum BLETestFixtures {
 }
 
 final class ManualDisplayClock: DisplayClock, @unchecked Sendable {
+    private let lock = NSLock()
     private var elapsed: TimeInterval = 0
     let origin: Date
     private var tasks: [String: (fireAt: TimeInterval, body: () -> Void)] = [:]
@@ -16,27 +17,38 @@ final class ManualDisplayClock: DisplayClock, @unchecked Sendable {
     }
 
     var date: Date {
-        origin.addingTimeInterval(elapsed)
+        lock.lock()
+        defer { lock.unlock() }
+        return origin.addingTimeInterval(elapsed)
     }
 
     func schedule(id: String, after: TimeInterval, _ body: @escaping () -> Void) {
+        lock.lock()
         tasks[id] = (elapsed + after, body)
+        lock.unlock()
     }
 
     func cancel(id: String) {
+        lock.lock()
         tasks[id] = nil
+        lock.unlock()
     }
 
     func cancelAll() {
+        lock.lock()
         tasks.removeAll()
+        lock.unlock()
     }
 
     func advance(_ interval: TimeInterval) {
+        lock.lock()
         elapsed += interval
         let due = tasks.filter { $0.value.fireAt <= elapsed }
         for key in due.keys {
             tasks[key] = nil
         }
+        let queue = self.queue
+        lock.unlock()
         let run = {
             for item in due.values {
                 item.body()

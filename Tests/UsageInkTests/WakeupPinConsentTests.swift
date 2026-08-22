@@ -115,18 +115,19 @@ final class WakeupPinConsentTests: XCTestCase {
     func testCancelDisconnectSleepConfigChangeAndStaleConfirmationWriteNothing() throws {
         let harness = try RuntimeHarness()
         let first = try becomeReady(harness)
-        let originalWrites = harness.radio.writes.count
 
         harness.radio.emitDisconnect(desk)
         let dropped = waitFor(harness, "dropped") { $0.bleLink == .disconnected && $0.hasReadyWakeupConfiguration == false }
         wait(for: [dropped], timeout: 1.0)
+        waitSettled()
+        let afterDisconnect = harness.radio.writes.count
         harness.runtime.submit(
             .configureWakeupPin(
                 WakeupPinWriteRequest(pin: 4, sessionGeneration: first.sessionGeneration, configDigest: first.configDigest)
             )
         )
         waitSettled()
-        XCTAssertEqual(harness.radio.writes.count, originalWrites)
+        XCTAssertEqual(harness.radio.writes.count, afterDisconnect)
 
         let recovered = waitFor(harness, "recovered") { $0.bleLink == .ready && $0.hasReadyWakeupConfiguration }
         harness.radio.peripherals[desk] = FakePeripheralSpec()
