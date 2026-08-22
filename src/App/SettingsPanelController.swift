@@ -323,6 +323,25 @@ final class SettingsPanelController: NSObject {
         panel.makeKeyAndOrderFront(nil)
     }
 
+    func presentBindScan(_ controller: BindScanPanelController) {
+        show()
+        let sheet = controller.hostedPanel
+        if panel.attachedSheet === sheet {
+            return
+        }
+        if let existing = panel.attachedSheet {
+            panel.endSheet(existing)
+        }
+        panel.beginSheet(sheet)
+    }
+
+    func dismissBindScan(_ controller: BindScanPanelController) {
+        if panel.attachedSheet === controller.hostedPanel {
+            panel.endSheet(controller.hostedPanel)
+        }
+        controller.dismiss()
+    }
+
     private func apply(draft: DisplayPreferences, writable: Bool, showDisclosure: Bool) {
         self.draft = draft
         disclosureScroll.isHidden = !showDisclosure

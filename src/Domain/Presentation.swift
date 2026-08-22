@@ -53,11 +53,23 @@ struct StatusSummaryFormatter: Sendable, Equatable {
     func summary(
         account: SourceAvailability,
         local: SourceAvailability,
-        displayUnavailable: Bool
+        displayUnavailable: Bool,
+        bleLink: BLELinkState = .unbound,
+        classification: BLEClassification? = nil
     ) -> String {
         var parts = [accountText(account), localText(local)]
-        if displayUnavailable {
-            parts.append(displayUnavailableText)
+        if let linkText = bleLink.menuText(language: language) {
+            parts.append(linkText)
+        }
+        if let classification, classification == .firmwareIncompatible {
+            parts.append(classification.menuText(language: language))
+        } else if displayUnavailable {
+            if bleLink.menuText(language: language) == nil {
+                parts.append(displayUnavailableText)
+            }
+            if let classification {
+                parts.append(classification.menuText(language: language))
+            }
         }
         return parts.joined(separator: " · ")
     }

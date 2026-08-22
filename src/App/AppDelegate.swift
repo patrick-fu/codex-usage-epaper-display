@@ -34,7 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let sink = MainSnapshotSink { snapshot in
             controller.apply(snapshot)
         }
-        let runtime = UsageInkRuntime { snapshot in
+        let runtime = UsageInkRuntime(makeLink: Self.makeDisplayLink) { snapshot in
             sink.publish(snapshot)
         }
         self.runtime = runtime
@@ -49,6 +49,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         false
+    }
+}
+
+extension AppDelegate {
+    nonisolated fileprivate static func makeDisplayLink(queue: DispatchQueue) -> DisplayLinkControlling {
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            return NullDisplayLink()
+        }
+        return ReadySessionCoordinator(
+            radio: NRF5Radio(queue: queue),
+            clock: DispatchDisplayClock(queue: queue)
+        )
     }
 }
 

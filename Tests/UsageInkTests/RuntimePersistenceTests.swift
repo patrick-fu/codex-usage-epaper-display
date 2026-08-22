@@ -39,7 +39,8 @@ final class RuntimePersistenceTests: XCTestCase {
         XCTAssertEqual(snapshot.displayStyle, .activityFocus)
         XCTAssertEqual(snapshot.panelTrust, .invalid)
         XCTAssertFalse(snapshot.hasReadyWakeupConfiguration)
-        XCTAssertEqual(snapshot.binding, .unbound)
+        XCTAssertEqual(snapshot.binding, .bound)
+        XCTAssertEqual(snapshot.bleLink, .disconnected)
         XCTAssertFalse(snapshot.showsFirstRunDisclosure)
         XCTAssertTrue(snapshot.isPersistenceWritable)
     }
