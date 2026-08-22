@@ -6,6 +6,7 @@ final class ModuleBoundaryTests: XCTestCase {
             "App": ["AppKit", "Foundation"],
             "Runtime": ["Foundation"],
             "Domain": ["Foundation"],
+            "Persistence": ["Foundation", "Darwin"],
         ]
         let src = RepoRoot.url().appendingPathComponent("src")
 

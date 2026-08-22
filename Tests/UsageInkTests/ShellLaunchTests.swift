@@ -5,12 +5,19 @@ import XCTest
 @MainActor
 final class ShellLaunchTests: XCTestCase {
     func testLaunchUsesAccessoryPolicyWithoutAMainWindow() throws {
-        _ = try AppLaunchSupport.bootstrapShell()
+        let delegate = try AppLaunchSupport.bootstrapShell()
         XCTAssertEqual(NSApp.activationPolicy(), .accessory)
+        let controller = try XCTUnwrap(delegate.statusItemController)
+        let menu = try XCTUnwrap(controller.menu)
+        waitForMenu(menu)
         let titledWindows = NSApp.windows.filter { window in
             window.isVisible && window.styleMask.contains(.titled)
         }
-        XCTAssertEqual(titledWindows, [], "shell launch must not present a main window")
+        XCTAssertLessThanOrEqual(titledWindows.count, 1)
+        for window in titledWindows {
+            XCTAssertTrue(window is NSPanel)
+            XCTAssertEqual(window.identifier, SettingsPanelController.windowIdentifier)
+        }
     }
 
     func testStatusItemExposesSpecifiedUnboundMenuSkeleton() throws {

@@ -40,6 +40,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.submit = { command in
             runtime.submit(command)
         }
+        settings.submit = { command in
+            runtime.submit(command)
+        }
         runtime.start()
     }
 

@@ -6,7 +6,7 @@ final class RuntimeOwnerTests: XCTestCase {
         let snapshotArrived = expectation(description: "initial snapshot")
         let box = SnapshotBox()
 
-        let runtime = UsageInkRuntime(language: .english) { snapshot in
+        let runtime = UsageInkRuntime(language: .english, store: PersistenceStore(root: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true))) { snapshot in
             box.snapshot = snapshot
             box.queueLabel = String(cString: __dispatch_queue_get_label(nil))
             snapshotArrived.fulfill()
@@ -27,7 +27,7 @@ final class RuntimeOwnerTests: XCTestCase {
         finished.expectedFulfillmentCount = 3
         let box = SnapshotBox()
 
-        let runtime = UsageInkRuntime(language: .english) { snapshot in
+        let runtime = UsageInkRuntime(language: .english, store: PersistenceStore(root: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true))) { snapshot in
             let count = box.append(snapshot)
             if count == 1 {
                 started.fulfill()
@@ -55,7 +55,7 @@ final class RuntimeOwnerTests: XCTestCase {
         finished.expectedFulfillmentCount = 4
         let box = SnapshotBox()
 
-        let runtime = UsageInkRuntime(language: .english) { snapshot in
+        let runtime = UsageInkRuntime(language: .english, store: PersistenceStore(root: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true))) { snapshot in
             let count = box.append(snapshot)
             if count == 1 {
                 started.fulfill()

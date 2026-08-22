@@ -7,6 +7,7 @@ final class StatusItemController: NSObject {
     private let confirmations: ConfirmationPrompting
     var submit: (@Sendable (RuntimeCommand) -> Void)?
     private var snapshot: RuntimeSnapshot?
+    private var didAutoPresentFirstRun = false
 
     init(settings: SettingsPanelController, confirmations: ConfirmationPrompting) {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -28,7 +29,12 @@ final class StatusItemController: NSObject {
 
     func apply(_ snapshot: RuntimeSnapshot) {
         self.snapshot = snapshot
+        settings.apply(snapshot)
         rebuildMenu()
+        if snapshot.showsFirstRunDisclosure && !didAutoPresentFirstRun {
+            didAutoPresentFirstRun = true
+            settings.show()
+        }
     }
 
     func openSettings() {
