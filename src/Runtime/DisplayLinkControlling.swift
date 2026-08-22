@@ -13,6 +13,8 @@ protocol DisplayLinkDelegate: AnyObject {
     func displayLinkDidClassify(_ classification: BLEClassification)
     func displayLinkDidBecomeReady(_ session: ReadyBLESession)
     func displayLinkDidDisconnect()
+    func displayLinkDidUpdateReadyConfig(_ config: EPDConfig)
+    func displayLinkDidFinishConfigWrite(succeeded: Bool)
 }
 
 protocol DisplayLinkControlling: AnyObject {
@@ -24,6 +26,7 @@ protocol DisplayLinkControlling: AnyObject {
     func recover(identifier: UUID)
     func unbind()
     func cancelWork()
+    func writeWakeupPin(_ pin: UInt8, sessionGeneration: UInt64, configDigest: Data) -> Bool
 }
 
 final class NullDisplayLink: DisplayLinkControlling {
@@ -36,4 +39,7 @@ final class NullDisplayLink: DisplayLinkControlling {
     func recover(identifier: UUID) {}
     func unbind() {}
     func cancelWork() {}
+    func writeWakeupPin(_ pin: UInt8, sessionGeneration: UInt64, configDigest: Data) -> Bool {
+        false
+    }
 }

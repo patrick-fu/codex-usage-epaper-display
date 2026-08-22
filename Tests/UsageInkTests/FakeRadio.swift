@@ -68,7 +68,9 @@ final class FakeRadio: RadioTransport {
     var peripherals: [UUID: FakePeripheralSpec] = [:]
     private(set) var writes: [BLEWriteRecord] = []
     private(set) var scanActive = false
+    var holdWriteAcknowledgements = false
     private var connected: UUID?
+    private var deferredWriteAcks: [(identifier: UUID, characteristic: UUID, failed: Bool)] = []
 
     func start() {
         emit { self.delegate?.radioDidChangeAvailability(self.availability) }
@@ -169,11 +171,39 @@ final class FakeRadio: RadioTransport {
         if spec?.mtuBeforeWriteAck == true, let text = spec?.autoMTUText {
             emitValue(identifier: identifier, characteristic: DisplayLinkUUIDs.data, value: Data(text.utf8))
         }
+        if holdWriteAcknowledgements, type == .withResponse {
+            deferredWriteAcks.append((identifier, characteristic, failed))
+            return
+        }
         emit {
             self.delegate?.radioDidWrite(identifier: identifier, characteristic: characteristic, failed: failed)
         }
         if spec?.mtuBeforeWriteAck != true, !failed, let text = spec?.autoMTUText {
             emitValue(identifier: identifier, characteristic: DisplayLinkUUIDs.data, value: Data(text.utf8))
+        }
+    }
+
+    func acknowledgeNextWrite() {
+        guard !deferredWriteAcks.isEmpty else {
+            return
+        }
+        let ack = deferredWriteAcks.removeFirst()
+        emit {
+            self.delegate?.radioDidWrite(
+                identifier: ack.identifier,
+                characteristic: ack.characteristic,
+                failed: ack.failed
+            )
+        }
+        if ack.failed {
+            return
+        }
+        let spec = peripherals[ack.identifier]
+        if spec?.mtuBeforeWriteAck == true {
+            return
+        }
+        if let text = spec?.autoMTUText {
+            emitValue(identifier: ack.identifier, characteristic: DisplayLinkUUIDs.data, value: Data(text.utf8))
         }
     }
 

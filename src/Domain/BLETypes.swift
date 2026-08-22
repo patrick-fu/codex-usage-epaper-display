@@ -157,6 +157,64 @@ struct BindCandidate: Sendable, Equatable {
     }
 }
 
+enum WakeupPin {
+    static let disabled: UInt8 = 0xFF
+
+    static func isAllowed(_ value: UInt8) -> Bool {
+        value <= 31 || value == disabled
+    }
+
+    static func parse(_ raw: String) -> UInt8? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return nil
+        }
+        let lowered = trimmed.lowercased()
+        if lowered == "disabled" || lowered == "0xff" || lowered == "禁用" {
+            return disabled
+        }
+        guard let value = UInt8(trimmed), isAllowed(value) else {
+            return nil
+        }
+        return value
+    }
+}
+
+enum WakeupPinCopy {
+    static let confirmationMessage = "Configure Wakeup Pin / 配置唤醒引脚"
+    static let requestMessage = "Wakeup Pin / 唤醒引脚"
+    static let requestInformation = """
+Enter a pin from 0 to 31, or disabled.
+
+请输入 0 到 31 的引脚，或填写 disabled。
+"""
+
+    static func label(_ pin: UInt8, language: ResolvedInterfaceLanguage) -> String {
+        if pin == WakeupPin.disabled {
+            return language == .english ? "Disabled" : "已禁用"
+        }
+        return "\(pin)"
+    }
+
+    static func confirmationInformation(from old: UInt8, to new: UInt8) -> String {
+        let english = "Change wakeup pin from \(label(old, language: .english)) to \(label(new, language: .english))?"
+        let chinese = "将唤醒引脚从 \(label(old, language: .simplifiedChinese)) 改为 \(label(new, language: .simplifiedChinese))？"
+        return "\(english)\n\n\(chinese)"
+    }
+}
+
+struct ReadyWakeupConfiguration: Sendable, Equatable {
+    var pin: UInt8
+    var sessionGeneration: UInt64
+    var configDigest: Data
+}
+
+struct WakeupPinWriteRequest: Sendable, Equatable {
+    var pin: UInt8
+    var sessionGeneration: UInt64
+    var configDigest: Data
+}
+
 struct EPDConfig: Sendable, Equatable {
     var bytes: [UInt8]
 
@@ -170,6 +228,28 @@ struct EPDConfig: Sendable, Equatable {
     var wakeupPin: UInt8 {
         bytes[8]
     }
+
+    var digest: Data {
+        Data(bytes)
+    }
+
+    func replacingWakeupPin(_ pin: UInt8) -> EPDConfig? {
+        guard WakeupPin.isAllowed(pin) else {
+            return nil
+        }
+        var next = bytes
+        next[8] = pin
+        return EPDConfig(data: Data(next))
+    }
+
+    func differsOnlyByWakeupPin(from other: EPDConfig) -> Bool {
+        guard bytes.count == other.bytes.count else {
+            return false
+        }
+        return zip(bytes.indices, bytes).allSatisfy { index, value in
+            index == 8 || value == other.bytes[index]
+        }
+    }
 }
 
 struct ReadyBLESession: Sendable, Equatable {
@@ -179,6 +259,7 @@ struct ReadyBLESession: Sendable, Equatable {
     var mtu: Int
     var rleEnabled: Bool
     var timeUnixSeconds: Int?
+    var generation: UInt64
 }
 
 struct BLEWriteRecord: Sendable, Equatable {

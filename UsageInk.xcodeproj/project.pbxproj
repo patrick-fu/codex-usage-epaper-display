@@ -56,6 +56,7 @@
 		F69D47ED4A79687413D61129 /* BLETypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86ACE923CCE5BD85C582AA5A /* BLETypes.swift */; };
 		F74EFB3C7C4BC6D4DD954EE2 /* DisplayFrameComposerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 262B3EFB614DD02E72007495 /* DisplayFrameComposerTests.swift */; };
 		FE4AA7964908327DC217DF74 /* FrameRasterizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE2E04323266F642D1DE0B50 /* FrameRasterizer.swift */; };
+		C22A10E15E7A11F0B4C5D6E7 /* WakeupPinConsentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C22A10E15E7A11F0A1B2C3D4 /* WakeupPinConsentTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -121,6 +122,7 @@
 		F975DEE9DA0FF6A3EE9D7F03 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/InfoPlist.strings"; sourceTree = "<group>"; };
 		FAF9444C4CE469CFCCFE3BFE /* DisplayPreferencesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayPreferencesTests.swift; sourceTree = "<group>"; };
 		FFA8674546B395F2A785E5DC /* UsageInkTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = UsageInkTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		C22A10E15E7A11F0A1B2C3D4 /* WakeupPinConsentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WakeupPinConsentTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -172,6 +174,7 @@
 				B0D83C2B7B02F56350859998 /* RuntimePersistenceTests.swift */,
 				6D1DFE61DB4661922F0305CD /* SettingsPanelTests.swift */,
 				0DC9DE31E8CEBDACFC0E4F4C /* ShellLaunchTests.swift */,
+				C22A10E15E7A11F0A1B2C3D4 /* WakeupPinConsentTests.swift */,
 			);
 			path = UsageInkTests;
 			sourceTree = "<group>";
@@ -387,6 +390,7 @@
 				A35B04018EDF3BC8D05F1036 /* RuntimePersistenceTests.swift in Sources */,
 				EEB8953DDD53614B3D32F04F /* SettingsPanelTests.swift in Sources */,
 				9BDFB079A2A9B8596D815541 /* ShellLaunchTests.swift in Sources */,
+				C22A10E15E7A11F0B4C5D6E7 /* WakeupPinConsentTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

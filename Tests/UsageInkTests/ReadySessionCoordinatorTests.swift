@@ -237,6 +237,151 @@ final class ReadySessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(harness.radio.writes.count, 1)
     }
 
+    func testWakeupPinWriteSendsCompleteConfigAndRejectsStaleOrInvalidRequests() throws {
+        let harness = CoordinatorHarness()
+        harness.radio.peripherals[desk] = FakePeripheralSpec()
+        harness.coordinator.attach()
+        harness.coordinator.startBindScan()
+        harness.coordinator.bind(identifier: desk)
+        XCTAssertEqual(harness.link, .ready)
+        let session = try XCTUnwrap(harness.session)
+        XCTAssertEqual(session.generation, 1)
+        XCTAssertEqual(session.config.wakeupPin, 0xFF)
+
+        XCTAssertFalse(
+            harness.coordinator.writeWakeupPin(
+                32,
+                sessionGeneration: session.generation,
+                configDigest: session.config.digest
+            )
+        )
+        XCTAssertFalse(
+            harness.coordinator.writeWakeupPin(
+                12,
+                sessionGeneration: session.generation &+ 1,
+                configDigest: session.config.digest
+            )
+        )
+        XCTAssertTrue(
+            harness.coordinator.writeWakeupPin(
+                12,
+                sessionGeneration: session.generation,
+                configDigest: session.config.digest
+            )
+        )
+        XCTAssertEqual(harness.lastConfigWriteSucceeded, true)
+        XCTAssertEqual(harness.session?.config.wakeupPin, 12)
+        let setConfig = harness.radio.writes.filter { $0.opcode == DisplayLinkUUIDs.setConfigOpcode }
+        XCTAssertEqual(setConfig.count, 1)
+        XCTAssertEqual(setConfig[0].withResponse, true)
+        XCTAssertEqual(Array(setConfig[0].data), [0x90, 8, 7, 6, 5, 4, 3, 2, 1, 12, 0, 1, 0, 1])
+        XCTAssertFalse(harness.radio.writes.contains { DisplayLinkUUIDs.forbiddenOpcodes.contains($0.opcode ?? 255) })
+
+        var changed = Array(BLETestFixtures.sampleConfig)
+        changed[0] = 9
+        harness.radio.emitValue(
+            identifier: desk,
+            characteristic: DisplayLinkUUIDs.data,
+            value: Data(changed)
+        )
+        XCTAssertNotEqual(harness.session?.config.digest, session.config.digest)
+        XCTAssertFalse(
+            harness.coordinator.writeWakeupPin(
+                7,
+                sessionGeneration: session.generation,
+                configDigest: session.config.digest
+            )
+        )
+        XCTAssertEqual(harness.radio.writes.filter { $0.opcode == DisplayLinkUUIDs.setConfigOpcode }.count, 1)
+    }
+
+    func testWakeupPinWriteDoesNotSendAfterDisconnect() throws {
+        let harness = CoordinatorHarness()
+        harness.radio.peripherals[desk] = FakePeripheralSpec()
+        harness.coordinator.attach()
+        harness.coordinator.startBindScan()
+        harness.coordinator.bind(identifier: desk)
+        let session = try XCTUnwrap(harness.session)
+        harness.coordinator.confirmBoundIdentity(desk)
+        harness.radio.emitDisconnect(desk)
+        XCTAssertFalse(
+            harness.coordinator.writeWakeupPin(
+                4,
+                sessionGeneration: session.generation,
+                configDigest: session.config.digest
+            )
+        )
+        XCTAssertFalse(harness.radio.writes.contains { $0.opcode == DisplayLinkUUIDs.setConfigOpcode })
+    }
+
+    func testInFlightSetConfigIsRejectedAndOnlyMatchingWriteCompletes() throws {
+        let harness = CoordinatorHarness()
+        harness.radio.peripherals[desk] = FakePeripheralSpec()
+        harness.coordinator.attach()
+        harness.coordinator.startBindScan()
+        harness.coordinator.bind(identifier: desk)
+        let session = try XCTUnwrap(harness.session)
+        harness.radio.holdWriteAcknowledgements = true
+
+        XCTAssertTrue(
+            harness.coordinator.writeWakeupPin(
+                12,
+                sessionGeneration: session.generation,
+                configDigest: session.config.digest
+            )
+        )
+        XCTAssertFalse(
+            harness.coordinator.writeWakeupPin(
+                7,
+                sessionGeneration: session.generation,
+                configDigest: session.config.digest
+            )
+        )
+        XCTAssertEqual(harness.radio.writes.filter { $0.opcode == DisplayLinkUUIDs.setConfigOpcode }.count, 1)
+        XCTAssertEqual(harness.session?.config.wakeupPin, 0xFF)
+        XCTAssertNil(harness.lastConfigWriteSucceeded)
+
+        harness.radio.acknowledgeNextWrite()
+        XCTAssertEqual(harness.lastConfigWriteSucceeded, true)
+        XCTAssertEqual(harness.session?.config.wakeupPin, 12)
+        XCTAssertEqual(harness.radio.writes.filter { $0.opcode == DisplayLinkUUIDs.setConfigOpcode }.count, 1)
+    }
+
+    func testLateInitWriteAckDoesNotCompleteSetConfig() throws {
+        let harness = CoordinatorHarness()
+        var spec = FakePeripheralSpec()
+        spec.mtuBeforeWriteAck = true
+        spec.autoMTUText = "mtu=185"
+        harness.radio.peripherals[desk] = spec
+        harness.radio.holdWriteAcknowledgements = true
+        harness.coordinator.attach()
+        harness.coordinator.startBindScan()
+        harness.coordinator.bind(identifier: desk)
+        XCTAssertEqual(harness.link, .ready)
+        let session = try XCTUnwrap(harness.session)
+        XCTAssertEqual(session.config.wakeupPin, 0xFF)
+
+        XCTAssertTrue(
+            harness.coordinator.writeWakeupPin(
+                12,
+                sessionGeneration: session.generation,
+                configDigest: session.config.digest
+            )
+        )
+        XCTAssertEqual(harness.radio.writes.map(\.opcode), [
+            DisplayLinkUUIDs.initOpcode,
+            DisplayLinkUUIDs.setConfigOpcode,
+        ])
+
+        harness.radio.acknowledgeNextWrite()
+        XCTAssertNil(harness.lastConfigWriteSucceeded)
+        XCTAssertEqual(harness.session?.config.wakeupPin, 0xFF)
+
+        harness.radio.acknowledgeNextWrite()
+        XCTAssertEqual(harness.lastConfigWriteSucceeded, true)
+        XCTAssertEqual(harness.session?.config.wakeupPin, 12)
+    }
+
     func testClassificationCopyIsLocalizedNotCamelCase() {
         for classification in [
             BLEClassification.boundDisplayNotFound,
@@ -322,6 +467,7 @@ private final class CoordinatorHarness: DisplayLinkDelegate {
     var candidates: [BindCandidate] = []
     var classification: BLEClassification?
     var session: ReadyBLESession?
+    var lastConfigWriteSucceeded: Bool?
 
     init() {
         coordinator = ReadySessionCoordinator(radio: radio, clock: clock)
@@ -334,4 +480,10 @@ private final class CoordinatorHarness: DisplayLinkDelegate {
     func displayLinkDidClassify(_ classification: BLEClassification) { self.classification = classification }
     func displayLinkDidBecomeReady(_ session: ReadyBLESession) { self.session = session }
     func displayLinkDidDisconnect() {}
+    func displayLinkDidUpdateReadyConfig(_ config: EPDConfig) {
+        session?.config = config
+    }
+    func displayLinkDidFinishConfigWrite(succeeded: Bool) {
+        lastConfigWriteSucceeded = succeeded
+    }
 }

@@ -1,5 +1,15 @@
 import Foundation
 
+private enum RadioWriteOperation {
+    case initialize
+    case setConfig(EPDConfig)
+}
+
+private struct InFlightWrite {
+    var operationID: UInt64
+    var operation: RadioWriteOperation
+}
+
 final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDelegate {
     weak var delegate: DisplayLinkDelegate?
     private let radio: RadioTransport
@@ -16,6 +26,9 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
     private var currentConfig: EPDConfig?
     private var rleEnabled = false
     private var timeUnixSeconds: Int?
+    private var sessionGeneration: UInt64 = 0
+    private var nextWriteOperationID: UInt64 = 0
+    private var inFlightWrites: [InFlightWrite] = []
 
     init(radio: RadioTransport, clock: DisplayClock) {
         self.radio = radio
@@ -75,6 +88,24 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         confirmedIdentity = nil
         cancelWork()
         emitLink(.unbound)
+    }
+
+    func writeWakeupPin(_ pin: UInt8, sessionGeneration: UInt64, configDigest: Data) -> Bool {
+        guard link == .ready,
+              self.sessionGeneration == sessionGeneration,
+              let identifier = activeIdentifier,
+              let current = currentConfig,
+              current.digest == configDigest,
+              let next = current.replacingWakeupPin(pin),
+              next.differsOnlyByWakeupPin(from: current),
+              !hasInFlightSetConfig
+        else {
+            return false
+        }
+        var payload = Data([DisplayLinkUUIDs.setConfigOpcode])
+        payload.append(contentsOf: next.bytes)
+        issueWrite(identifier: identifier, data: payload, operation: .setConfig(next))
+        return true
     }
 
     func cancelWork() {
@@ -222,15 +253,35 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         }
         if link == .initializing {
             handleMTUText(value)
+            return
+        }
+        if link == .ready, !hasInFlightSetConfig, let config = EPDConfig(data: value) {
+            currentConfig = config
+            delegate?.displayLinkDidUpdateReadyConfig(config)
         }
     }
 
     func radioDidWrite(identifier: UUID, characteristic: UUID, failed: Bool) {
-        guard activeIdentifier == identifier, link == .initializing else {
+        guard activeIdentifier == identifier, !inFlightWrites.isEmpty else {
             return
         }
-        if failed {
-            fail(.initTimeout)
+        let completed = inFlightWrites.removeFirst()
+        switch completed.operation {
+        case .initialize:
+            if link == .initializing, failed {
+                fail(.initTimeout)
+            }
+        case .setConfig(let written):
+            guard link == .ready else {
+                return
+            }
+            if failed {
+                delegate?.displayLinkDidFinishConfigWrite(succeeded: false)
+                return
+            }
+            currentConfig = written
+            delegate?.displayLinkDidUpdateReadyConfig(written)
+            delegate?.displayLinkDidFinishConfigWrite(succeeded: true)
         }
     }
 
@@ -281,11 +332,10 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         emitLink(.initializing)
         initGeneration += 1
         initGateOpen = true
-        radio.write(
+        issueWrite(
             identifier: activeIdentifier!,
-            characteristic: DisplayLinkUUIDs.data,
             data: Data([DisplayLinkUUIDs.initOpcode]),
-            type: .withResponse
+            operation: .initialize
         )
         clock.schedule(id: "init", after: 5) { [weak self] in
             self?.fail(.initTimeout)
@@ -318,6 +368,7 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
             return
         }
         initGateOpen = false
+        sessionGeneration += 1
         emitLink(.ready)
         delegate?.displayLinkDidBecomeReady(
             ReadyBLESession(
@@ -326,7 +377,8 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
                 config: config,
                 mtu: mtu,
                 rleEnabled: rleEnabled,
-                timeUnixSeconds: timeUnixSeconds
+                timeUnixSeconds: timeUnixSeconds,
+                generation: sessionGeneration
             )
         )
     }
@@ -383,6 +435,29 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         currentConfig = nil
         rleEnabled = false
         timeUnixSeconds = nil
+        inFlightWrites.removeAll()
+    }
+
+    private var hasInFlightSetConfig: Bool {
+        inFlightWrites.contains { write in
+            if case .setConfig = write.operation {
+                return true
+            }
+            return false
+        }
+    }
+
+    private func issueWrite(identifier: UUID, data: Data, operation: RadioWriteOperation) {
+        nextWriteOperationID += 1
+        inFlightWrites.append(
+            InFlightWrite(operationID: nextWriteOperationID, operation: operation)
+        )
+        radio.write(
+            identifier: identifier,
+            characteristic: DisplayLinkUUIDs.data,
+            data: data,
+            type: .withResponse
+        )
     }
 
     private func cancelTimers() {
