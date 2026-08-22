@@ -103,6 +103,69 @@ final class FrameFingerprintTests: XCTestCase {
         )
     }
 
+    func testStyleChangeAltersFingerprintAndElapsedTimeDoesNot() throws {
+        var balanced = DisplayPreferences.default
+        balanced.displayStyle = .balanced
+        var activity = DisplayPreferences.default
+        activity.displayStyle = .activityFocus
+        let quota = try DisplayFrameComposer.compose(DisplayFrameFixtures.input()).fingerprint
+        let balancedPrint = try DisplayFrameComposer.compose(
+            DisplayFrameFixtures.input(preferences: balanced)
+        ).fingerprint
+        let activityPrint = try DisplayFrameComposer.compose(
+            DisplayFrameFixtures.input(preferences: activity)
+        ).fingerprint
+        XCTAssertNotEqual(quota, balancedPrint)
+        XCTAssertNotEqual(quota, activityPrint)
+        XCTAssertNotEqual(balancedPrint, activityPrint)
+        let laterBalanced = try DisplayFrameComposer.compose(
+            DisplayFrameFixtures.input(
+                preferences: balanced,
+                composedAt: DisplayFrameFixtures.composedAt.addingTimeInterval(3_600)
+            )
+        ).fingerprint
+        XCTAssertEqual(balancedPrint, laterBalanced)
+    }
+
+    func testBalancedVisibleRolesAreBodyAndDisabledTitleKeepsPreferenceTitle() {
+        var preferences = DisplayPreferences.default
+        preferences.displayStyle = .balanced
+        preferences.modules.title = false
+        let document = FrameFingerprint.document(
+            BalancedModelBuilder.build(DisplayFrameFixtures.input(preferences: preferences))
+        )
+        guard case .object(let root) = document, case .array(let visible) = root["visible"] else {
+            return XCTFail("visible")
+        }
+        XCTAssertEqual(root["title"], .string("CODEX USAGE"))
+        XCTAssertEqual(root["style"], .string("balanced"))
+        assertField(visible[0], "id", .string("title"))
+        assertField(visible[0], "value", .string("USAGE"))
+        assertField(visible[2], "role", .string("body"))
+        assertField(visible[2], "id", .string("quota.primary"))
+    }
+
+    func testActivityFocusVisibleRolesAndUnusedQuotaOrderStillEnterRoot() {
+        var preferences = DisplayPreferences.default
+        preferences.displayStyle = .activityFocus
+        preferences.quotaOrder = .activityFirst
+        let document = FrameFingerprint.document(
+            ActivityFocusModelBuilder.build(DisplayFrameFixtures.input(preferences: preferences))
+        )
+        guard case .object(let root) = document, case .array(let visible) = root["visible"] else {
+            return XCTFail("visible")
+        }
+        XCTAssertEqual(root["style"], .string("activityFocus"))
+        XCTAssertEqual(root["quotaOrder"], .string("activityFirst"))
+        assertField(visible[2], "id", .string("local.today"))
+        assertField(visible[2], "role", .string("primary"))
+        assertField(visible[3], "role", .string("secondary"))
+        assertField(visible[4], "role", .string("quota"))
+        let json = CanonicalJSON.stringify(document)
+        XCTAssertFalse(json.contains("Updated "))
+        XCTAssertFalse(json.contains("Resets in"))
+    }
+
     func testFingerprintIsLowercaseHexSHA256() throws {
         let fingerprint = try DisplayFrameComposer.compose(DisplayFrameFixtures.input()).fingerprint
         XCTAssertEqual(fingerprint.count, 64)

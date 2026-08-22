@@ -11,22 +11,7 @@ struct DisplayFrameInput: Sendable, Equatable {
 }
 
 struct QuotaFocusFrameModel: Sendable, Equatable {
-    struct Field: Sendable, Equatable {
-        var id: String
-        var label: String
-        var displayedValue: String
-        var semanticValue: String?
-        var secondaryText: String?
-        var badge: String?
-        var availability: String
-        var usesRed: Bool
-        var progressPercent: Int?
-        var slot: String?
-        var windowDurationMins: String?
-        var resetsAt: String?
-        var coverageComplete: Bool?
-        var isQuota: Bool
-    }
+    typealias Field = DisplayField
 
     var language: ResolvedInterfaceLanguage
     var languageCode: String
@@ -47,10 +32,7 @@ struct QuotaFocusFrameModel: Sendable, Equatable {
 }
 
 enum QuotaFocusModelBuilder {
-    enum Item: Equatable {
-        case quota(UsageWindowObservation)
-        case local(LocalMetricKind)
-    }
+    typealias Item = DisplayItem
 
     static func build(_ input: DisplayFrameInput) -> QuotaFocusFrameModel {
         var calendar = input.calendar
@@ -60,9 +42,10 @@ enum QuotaFocusModelBuilder {
             preferredLanguages: input.preferredLanguages
         )
         let modules = input.preferences.modules
-        let displayedTitle = modules.title
-            ? input.preferences.title
-            : "USAGE"
+        let displayedTitle = DisplayChromeBuilder.displayedTitle(
+            modules: modules,
+            title: input.preferences.title
+        )
         let plan = modules.plan ? DisplayCopy.displayedPlan(input.account.planType) : nil
         let (heroItem, tickerItems) = select(
             preferences: input.preferences,
@@ -108,8 +91,8 @@ enum QuotaFocusModelBuilder {
         account: AccountObservation,
         local: LocalActivityObservation
     ) -> (Item?, [Item]) {
-        let quotaItems = preferences.modules.quota ? returnedWindows(account.windows).map(Item.quota) : []
-        let localItems = enabledLocalMetrics(preferences.modules).map(Item.local)
+        let quotaItems = preferences.modules.quota ? returnedWindows(account.windows).map(DisplayItem.quota) : []
+        let localItems = DisplayFieldFactory.enabledLocalMetrics(preferences.modules).map(DisplayItem.local)
         let preferred = preferences.quotaOrder == .quotaFirst ? quotaItems : localItems
         let fallback = preferences.quotaOrder == .quotaFirst ? localItems : quotaItems
         let usingPreferred = !preferred.isEmpty
@@ -123,21 +106,7 @@ enum QuotaFocusModelBuilder {
     }
 
     static func returnedWindows(_ windows: [UsageWindowObservation]) -> [UsageWindowObservation] {
-        let canonical: [UsageWindowSlot] = [.primary, .secondary]
-        return canonical.compactMap { slot in
-            windows.first { $0.slot == slot && $0.windowDurationMins > 0 }
-        }
-    }
-
-    private static func enabledLocalMetrics(_ modules: DisplayModules) -> [LocalMetricKind] {
-        LocalMetricKind.allCases.filter { kind in
-            switch kind {
-            case .today: return modules.today
-            case .weekTokens: return modules.weekTokens
-            case .cache: return modules.cache
-            case .tps: return modules.tps
-            }
-        }
+        DisplayFieldFactory.returnedWindows(windows)
     }
 
     private static func pickHero(from items: [Item]) -> Item? {
@@ -164,123 +133,7 @@ enum QuotaFocusModelBuilder {
         input: DisplayFrameInput,
         calendar: Calendar,
         language: ResolvedInterfaceLanguage
-    ) -> QuotaFocusFrameModel.Field {
-        switch item {
-        case .quota(let window):
-            return quotaField(window, input: input, calendar: calendar, language: language)
-        case .local(let kind):
-            return localField(kind, input: input, language: language)
-        }
-    }
-
-    private static func quotaField(
-        _ window: UsageWindowObservation,
-        input: DisplayFrameInput,
-        calendar: Calendar,
-        language: ResolvedInterfaceLanguage
-    ) -> QuotaFocusFrameModel.Field {
-        let percent = DisplayCopy.formatPercent(window.usedPercent)
-        let text = percent.map { "\($0)%" }
-        let badge = DisplayCopy.degradedMessage(
-            availability: input.account.availability,
-            failure: input.account.failure,
-            source: .account,
-            language: language
-        )
-        let hasHistory = text != nil
-        let displayed: String
-        if let text, hasHistory {
-            displayed = text
-        } else {
-            displayed = DisplayCopy.emDash
-        }
-        let usesRed: Bool
-        if let percent {
-            usesRed = quotaUsesRed(percent, preferences: input.preferences)
-        } else {
-            usesRed = false
-        }
-        return QuotaFocusFrameModel.Field(
-            id: "quota.\(window.slot.rawValue)",
-            label: DisplayCopy.windowLabel(durationMinutes: window.windowDurationMins, language: language),
-            displayedValue: displayed,
-            semanticValue: text,
-            secondaryText: DisplayCopy.resetText(
-                resetsAt: window.resetsAt,
-                composedAt: input.composedAt,
-                dateFormat: input.preferences.dateFormat,
-                calendar: calendar,
-                timeZone: input.timeZone,
-                language: language
-            ),
-            badge: hasHistory ? (input.account.availability == .stale ? badge : nil) : badge,
-            availability: input.account.availability.rawValue,
-            usesRed: usesRed,
-            progressPercent: percent,
-            slot: window.slot.rawValue,
-            windowDurationMins: String(window.windowDurationMins),
-            resetsAt: window.resetsAt.flatMap { seconds in
-                DisplayCopy.date(fromUnixSeconds: seconds, calendar: calendar).map { _ in String(seconds) }
-            },
-            coverageComplete: nil,
-            isQuota: true
-        )
-    }
-
-    private static func localField(
-        _ kind: LocalMetricKind,
-        input: DisplayFrameInput,
-        language: ResolvedInterfaceLanguage
-    ) -> QuotaFocusFrameModel.Field {
-        let observation = input.localActivity
-        let semantic: String?
-        switch kind {
-        case .today:
-            semantic = observation.todayTokens.map(DisplayCopy.formatTokens)
-        case .weekTokens:
-            semantic = observation.weekTokens.map(DisplayCopy.formatTokens)
-        case .cache:
-            if observation.coverageComplete, let rate = observation.cacheHitRate {
-                semantic = DisplayCopy.formatCacheRate(rate)
-            } else {
-                semantic = nil
-            }
-        case .tps:
-            semantic = observation.tps.flatMap(DisplayCopy.formatTPS)
-        }
-        let hasHistory = semantic != nil
-        let badge = DisplayCopy.degradedMessage(
-            availability: observation.availability,
-            failure: observation.failure,
-            source: .local,
-            language: language
-        )
-        return QuotaFocusFrameModel.Field(
-            id: "local.\(kind.rawValue)",
-            label: DisplayCopy.localLabel(kind: kind, language: language),
-            displayedValue: semantic ?? DisplayCopy.emDash,
-            semanticValue: semantic,
-            secondaryText: nil,
-            badge: hasHistory ? (observation.availability == .stale ? badge : nil) : badge,
-            availability: observation.availability.rawValue,
-            usesRed: false,
-            progressPercent: nil,
-            slot: nil,
-            windowDurationMins: nil,
-            resetsAt: nil,
-            coverageComplete: kind == .cache ? observation.coverageComplete : nil,
-            isQuota: false
-        )
-    }
-
-    private static func quotaUsesRed(_ percent: Int, preferences: DisplayPreferences) -> Bool {
-        switch preferences.redAccent {
-        case .off:
-            return false
-        case .always:
-            return true
-        case .threshold:
-            return percent >= preferences.redThreshold
-        }
+    ) -> DisplayField {
+        DisplayFieldFactory.makeField(item, input: input, calendar: calendar, language: language)
     }
 }

@@ -54,42 +54,128 @@ enum CanonicalJSON {
 
 enum FrameFingerprint {
     static func hexSHA256(of model: QuotaFocusFrameModel) -> String {
-        let json = CanonicalJSON.stringify(document(model))
+        hexSHA256(document(model))
+    }
+
+    static func hexSHA256(of model: BalancedFrameModel) -> String {
+        hexSHA256(document(model))
+    }
+
+    static func hexSHA256(of model: ActivityFocusFrameModel) -> String {
+        hexSHA256(document(model))
+    }
+
+    static func document(_ model: QuotaFocusFrameModel) -> CanonicalJSON.Value {
+        var fields: [(DisplayField, String)] = []
+        if let hero = model.hero {
+            fields.append((hero, "hero"))
+        }
+        for field in model.ticker {
+            fields.append((field, "ticker"))
+        }
+        return document(
+            languageCode: model.languageCode,
+            preferences: model.preferences,
+            title: model.title,
+            showPlan: model.showPlan,
+            plan: model.plan,
+            accountAvailability: model.accountAvailability,
+            accountFailure: model.accountFailure,
+            localAvailability: model.localAvailability,
+            localFailure: model.localFailure,
+            localCoverageComplete: model.localCoverageComplete,
+            visibleFields: fields
+        )
+    }
+
+    static func document(_ model: BalancedFrameModel) -> CanonicalJSON.Value {
+        document(
+            languageCode: model.languageCode,
+            preferences: model.preferences,
+            title: model.title,
+            showPlan: model.showPlan,
+            plan: model.plan,
+            accountAvailability: model.accountAvailability,
+            accountFailure: model.accountFailure,
+            localAvailability: model.localAvailability,
+            localFailure: model.localFailure,
+            localCoverageComplete: model.localCoverageComplete,
+            visibleFields: model.entries.map { ($0, "body") }
+        )
+    }
+
+    static func document(_ model: ActivityFocusFrameModel) -> CanonicalJSON.Value {
+        var fields: [(DisplayField, String)] = []
+        if let primary = model.primary {
+            fields.append((primary, "primary"))
+        }
+        for field in model.secondary {
+            fields.append((field, "secondary"))
+        }
+        for field in model.quotas {
+            fields.append((field, "quota"))
+        }
+        return document(
+            languageCode: model.languageCode,
+            preferences: model.preferences,
+            title: model.title,
+            showPlan: model.showPlan,
+            plan: model.plan,
+            accountAvailability: model.accountAvailability,
+            accountFailure: model.accountFailure,
+            localAvailability: model.localAvailability,
+            localFailure: model.localFailure,
+            localCoverageComplete: model.localCoverageComplete,
+            visibleFields: fields
+        )
+    }
+
+    private static func hexSHA256(_ document: CanonicalJSON.Value) -> String {
+        let json = CanonicalJSON.stringify(document)
         let digest = SHA256.hash(data: Data(json.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
-    static func document(_ model: QuotaFocusFrameModel) -> CanonicalJSON.Value {
+    static func document(
+        languageCode: String,
+        preferences: DisplayPreferences,
+        title: String,
+        showPlan: Bool,
+        plan: String?,
+        accountAvailability: String,
+        accountFailure: String?,
+        localAvailability: String,
+        localFailure: String?,
+        localCoverageComplete: Bool,
+        visibleFields: [(DisplayField, String)]
+    ) -> CanonicalJSON.Value {
         var visible: [CanonicalJSON.Value] = [
             .object([
                 "id": .string("title"),
-                "value": .string(model.title)
+                "value": .string(title)
             ])
         ]
-        if model.showPlan {
+        if showPlan {
             visible.append(.object([
                 "id": .string("plan"),
-                "value": model.plan.map(CanonicalJSON.Value.string) ?? .null
+                "value": plan.map(CanonicalJSON.Value.string) ?? .null
             ]))
         }
-        if let hero = model.hero {
-            visible.append(visibleObject(hero, role: "hero"))
-        }
-        for field in model.ticker {
-            visible.append(visibleObject(field, role: "ticker"))
+        for (field, role) in visibleFields {
+            visible.append(visibleObject(field, role: role))
         }
 
-        let modules = model.preferences.modules
+        let modules = preferences.modules
         return .object([
             "v": .int(1),
-            "language": .string(model.languageCode),
-            "style": .string(model.preferences.displayStyle.rawValue),
-            "title": .string(model.preferences.title),
-            "quotaOrder": .string(model.preferences.quotaOrder.rawValue),
-            "dateFormat": .string(model.preferences.dateFormat.rawValue),
-            "redAccent": .string(model.preferences.redAccent.rawValue),
-            "redThreshold": .string(String(model.preferences.redThreshold)),
-            "tpsWindowMinutes": .string(String(model.preferences.tpsWindowMinutes)),
+            "language": .string(languageCode),
+            "style": .string(preferences.displayStyle.rawValue),
+            "title": .string(preferences.title),
+            "quotaOrder": .string(preferences.quotaOrder.rawValue),
+            "dateFormat": .string(preferences.dateFormat.rawValue),
+            "redAccent": .string(preferences.redAccent.rawValue),
+            "redThreshold": .string(String(preferences.redThreshold)),
+            "tpsWindowMinutes": .string(String(preferences.tpsWindowMinutes)),
             "modules": .object([
                 "title": .bool(modules.title),
                 "plan": .bool(modules.plan),
@@ -101,17 +187,17 @@ enum FrameFingerprint {
                 "updated": .bool(modules.updated),
                 "status": .bool(modules.status)
             ]),
-            "accountAvailability": .string(model.accountAvailability),
-            "accountFailure": model.accountFailure.map(CanonicalJSON.Value.string) ?? .null,
-            "localAvailability": .string(model.localAvailability),
-            "localFailure": model.localFailure.map(CanonicalJSON.Value.string) ?? .null,
-            "localCoverageComplete": .bool(model.localCoverageComplete),
+            "accountAvailability": .string(accountAvailability),
+            "accountFailure": accountFailure.map(CanonicalJSON.Value.string) ?? .null,
+            "localAvailability": .string(localAvailability),
+            "localFailure": localFailure.map(CanonicalJSON.Value.string) ?? .null,
+            "localCoverageComplete": .bool(localCoverageComplete),
             "visible": .array(visible)
         ])
     }
 
     private static func visibleObject(
-        _ field: QuotaFocusFrameModel.Field,
+        _ field: DisplayField,
         role: String
     ) -> CanonicalJSON.Value {
         var object: [String: CanonicalJSON.Value] = [
