@@ -88,7 +88,6 @@ final class CodexAppServerClient {
         private var rateLimitsFailure: CodexFailure?
         private var overloadRetries = 0
         private var pollStartedAt: TimeInterval = 0
-        private var hangingMethod: String?
         private var ordinaryRetryRemaining = false
 
         init(
@@ -152,7 +151,6 @@ final class CodexAppServerClient {
                 ],
             ]
             sendJSON(payload)
-            hangingMethod = "initialize"
             clock.schedule(id: "initialize", after: CodexAppServerClient.initializeTimeout) { [self] in
                 self.failCurrent(.timeout)
             }
@@ -170,7 +168,6 @@ final class CodexAppServerClient {
                 "method": "account/rateLimits/read",
                 "id": 3,
             ])
-            hangingMethod = "reads"
             clock.schedule(id: "account", after: CodexAppServerClient.readTimeout) { [self] in
                 self.failRead(isAccount: true, .timeout)
             }
@@ -240,7 +237,6 @@ final class CodexAppServerClient {
             switch id {
             case 1:
                 clock.cancel(id: "initialize")
-                hangingMethod = nil
                 switch validateInitialize(result) {
                 case .failure(let failure):
                     failCurrent(failure)
@@ -368,13 +364,8 @@ final class CodexAppServerClient {
         }
 
         private func validateInitialize(_ result: Any) -> Result<Void, CodexFailure> {
-            guard let object = result as? [String: Any] else {
+            guard result is [String: Any] else {
                 return .failure(.schemaInvalid)
-            }
-            for key in ["userAgent", "codexHome", "platformFamily", "platformOs"] {
-                guard object[key] is String else {
-                    return .failure(.schemaInvalid)
-                }
             }
             return .success(())
         }
@@ -394,16 +385,12 @@ final class CodexAppServerClient {
             guard accountTerminal && rateTerminal else {
                 return
             }
-            if let accountFailure, accountFailure == .authRequired {
-                finishCurrent(.failure(.authRequired))
-                return
-            }
             if let accountFailure {
-                finishCurrent(.failure(accountFailure))
+                finishOrdinary(.failure(accountFailure))
                 return
             }
             if let rateLimitsFailure {
-                finishCurrent(.failure(rateLimitsFailure))
+                finishOrdinary(.failure(rateLimitsFailure))
                 return
             }
             guard let accountResult else {
@@ -518,7 +505,6 @@ final class CodexAppServerClient {
             rateLimitsResult = nil
             rateLimitsFailure = nil
             overloadRetries = 0
-            hangingMethod = nil
         }
 
         private func sendJSON(_ object: [String: Any]) {

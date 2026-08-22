@@ -184,6 +184,50 @@ final class RuntimePollTests: XCTestCase {
         XCTAssertNotEqual(missingModel.hero?.displayedValue, "0%")
     }
 
+    func testVersionProbeDoesNotBlockRuntimeOwnerQueue() throws {
+        let probeQueue = DispatchQueue(label: "test.codex.probe")
+        let gate = DispatchSemaphore(value: 0)
+        let enteredProbe = expectation(description: "probe")
+        let box = PollSnapshotBox()
+        let runtime = UsageInkRuntime(
+            language: .english,
+            store: PersistenceStore(root: try makeRoot()),
+            makeCodex: { ownerQueue in
+                XCTAssertEqual(ownerQueue.label, UsageInkRuntime.queueLabel)
+                return CodexPollingDependencies(
+                    isEnabled: true,
+                    appVersion: "0.1.0",
+                    now: Date.init,
+                    resolve: { _ in
+                        XCTAssertNotEqual(
+                            String(cString: __dispatch_queue_get_label(nil)),
+                            UsageInkRuntime.queueLabel
+                        )
+                        enteredProbe.fulfill()
+                        gate.wait()
+                        return .failure(.binaryMissing)
+                    },
+                    poll: { _, _, _ in
+                        XCTFail("poll must wait for the worker probe")
+                    },
+                    probeQueue: probeQueue
+                )
+            }
+        ) { snapshot in
+            box.consume(snapshot)
+        }
+        runtime.start()
+        wait(for: [enteredProbe], timeout: 1.0)
+        let styleChanged = box.expect("style") { $0.displayStyle == .balanced }
+        runtime.submit(.setDisplayStyle(.balanced))
+        wait(for: [styleChanged], timeout: 1.0)
+        XCTAssertEqual(box.snapshot?.displayStyle, .balanced)
+        let missing = box.expect("missing") { $0.account.failure == "binaryMissing" }
+        gate.signal()
+        wait(for: [missing], timeout: 1.0)
+        XCTAssertEqual(box.snapshot?.statusSummary, "Codex not found · Local activity unknown")
+    }
+
     func testManualRefreshJoinsInFlightPollInsteadOfStartingASecondProcess() throws {
         let factory = ScriptedCodexFactory()
         let queue = DispatchQueue(label: "test.runtime.join")

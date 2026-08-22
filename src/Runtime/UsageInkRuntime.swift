@@ -353,15 +353,31 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             return
         }
         pollRunning = true
-        switch codex.resolve(productState.preferences.customCodexPath) {
+        let explicitPath = productState.preferences.customCodexPath
+        let appVersion = codex.appVersion
+        codex.probeQueue.async { [self] in
+            let resolved = self.codex.resolve(explicitPath)
+            self.queue.async {
+                self.handleResolvedBinary(resolved, appVersion: appVersion)
+            }
+        }
+    }
+
+    private func handleResolvedBinary(
+        _ resolved: Result<CodexResolvedBinary, CodexFailure>,
+        appVersion: String
+    ) {
+        dispatchPrecondition(condition: .onQueue(queue))
+        guard pollRunning else {
+            return
+        }
+        switch resolved {
         case .failure(let failure):
             applyAccountFailure(failure)
             pollRunning = false
             publish()
-            return
-        case .success(let resolved):
-            let version = codex.appVersion
-            codex.poll(resolved.path, version) { [weak self] result in
+        case .success(let binary):
+            codex.poll(binary.path, appVersion) { [weak self] result in
                 guard let self else {
                     return
                 }

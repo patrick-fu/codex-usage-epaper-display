@@ -56,7 +56,7 @@ enum CodexUsageNormalizer {
         case .failure(let failure):
             return .failure(failure)
         case .success(let snapshot):
-            return .success(parseWindows(snapshot))
+            return parseWindows(snapshot)
         }
     }
 
@@ -107,41 +107,58 @@ enum CodexUsageNormalizer {
         return .success(snapshot)
     }
 
-    private static func parseWindows(_ snapshot: [String: Any]) -> [UsageWindowObservation] {
+    private static func parseWindows(
+        _ snapshot: [String: Any]
+    ) -> Result<[UsageWindowObservation], CodexFailure> {
         var windows: [UsageWindowObservation] = []
-        if let primary = window(snapshot["primary"], slot: .primary) {
-            windows.append(primary)
+        switch window(snapshot["primary"], slot: .primary) {
+        case .failure(let failure):
+            return .failure(failure)
+        case .success(let primary):
+            if let primary {
+                windows.append(primary)
+            }
         }
-        if let secondary = window(snapshot["secondary"], slot: .secondary) {
-            windows.append(secondary)
+        switch window(snapshot["secondary"], slot: .secondary) {
+        case .failure(let failure):
+            return .failure(failure)
+        case .success(let secondary):
+            if let secondary {
+                windows.append(secondary)
+            }
         }
-        return windows
+        return .success(windows)
     }
 
-    private static func window(_ raw: Any?, slot: UsageWindowSlot) -> UsageWindowObservation? {
+    private static func window(
+        _ raw: Any?,
+        slot: UsageWindowSlot
+    ) -> Result<UsageWindowObservation?, CodexFailure> {
         if isNull(raw) {
-            return nil
+            return .success(nil)
         }
         guard let object = jsonObject(raw) else {
-            return nil
+            return .failure(.schemaInvalid)
         }
         guard let usedPercent = jsonDouble(object["usedPercent"]),
               usedPercent.isFinite,
               usedPercent >= 0,
               usedPercent <= 100 else {
-            return nil
+            return .failure(.schemaInvalid)
         }
         guard let duration = jsonInt(object["windowDurationMins"]), duration > 0 else {
-            return nil
+            return .failure(.schemaInvalid)
         }
         guard let resetsAt = jsonInt(object["resetsAt"]), isValidUnixSeconds(resetsAt) else {
-            return nil
+            return .failure(.schemaInvalid)
         }
-        return UsageWindowObservation(
-            slot: slot,
-            usedPercent: usedPercent,
-            windowDurationMins: duration,
-            resetsAt: resetsAt
+        return .success(
+            UsageWindowObservation(
+                slot: slot,
+                usedPercent: usedPercent,
+                windowDurationMins: duration,
+                resetsAt: resetsAt
+            )
         )
     }
 

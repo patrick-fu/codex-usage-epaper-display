@@ -276,6 +276,120 @@ final class CodexAppServerClientTests: XCTestCase {
         XCTAssertEqual(session.sent.map { $0["method"] as? String }, ["initialize"])
     }
 
+    func testInitializeSucceedsWhenDiagnosticFieldsAreAbsent() {
+        let (client, factory, _, _) = makeClient()
+        let session = ScriptedCodexSession()
+        factory.next = { session }
+        let finished = expectation(description: "poll")
+        var snapshot: CodexUsageSnapshot?
+        session.onSend = { object in
+            if object["method"] as? String == "initialize" {
+                session.respondJSON(jsonRPCResult(id: 1, result: ["protocolVersion": "2"]))
+            } else if object["method"] as? String == "account/read" {
+                session.respondJSON(jsonRPCResult(id: 2, result: proAccountResult()))
+                session.respondJSON(jsonRPCResult(id: 3, result: oneWindowResult()))
+            }
+        }
+        client.poll(executable: "/tmp/fake-codex", appVersion: "0.1.0") { result in
+            snapshot = try? result.get()
+            finished.fulfill()
+        }
+        wait(for: [finished], timeout: 1.0)
+        XCTAssertEqual(snapshot?.planType, "pro")
+        XCTAssertEqual(snapshot?.windows.count, 1)
+    }
+
+    func testAccountReadTimeoutRetriesOnceOnAFreshProcessThenSucceeds() {
+        let (client, factory, clock, queue) = makeClient()
+        let first = ScriptedCodexSession()
+        let second = ScriptedCodexSession()
+        var created = 0
+        factory.next = {
+            created += 1
+            return created == 1 ? first : second
+        }
+        let readsSent = expectation(description: "first reads")
+        first.onSend = { object in
+            if object["method"] as? String == "initialize" {
+                first.respondJSON(jsonRPCResult(id: 1, result: ["ok": true]))
+            } else if object["method"] as? String == "account/rateLimits/read" {
+                first.respondJSON(jsonRPCResult(id: 3, result: oneWindowResult()))
+                readsSent.fulfill()
+            }
+        }
+        second.onSend = { object in
+            if object["method"] as? String == "initialize" {
+                second.respondJSON(jsonRPCResult(id: 1, result: ["ok": true]))
+            } else if object["method"] as? String == "account/read" {
+                second.respondJSON(jsonRPCResult(id: 2, result: proAccountResult()))
+                second.respondJSON(jsonRPCResult(id: 3, result: twoWindowResult()))
+            }
+        }
+        let finished = expectation(description: "retry success")
+        var snapshot: CodexUsageSnapshot?
+        client.poll(executable: "/tmp/fake-codex", appVersion: "0.1.0") { result in
+            snapshot = try? result.get()
+            finished.fulfill()
+        }
+        wait(for: [readsSent], timeout: 1.0)
+        queue.sync {
+            clock.advance(CodexAppServerClient.readTimeout)
+        }
+        wait(for: [finished], timeout: 1.0)
+        XCTAssertEqual(factory.sessions.count, 2)
+        XCTAssertTrue(first.aborted)
+        XCTAssertEqual(snapshot?.windows.count, 2)
+    }
+
+    func testAccountReadTimeoutRetriesOnceThenFails() {
+        let (client, factory, clock, queue) = makeClient()
+        let first = ScriptedCodexSession()
+        let second = ScriptedCodexSession()
+        var created = 0
+        factory.next = {
+            created += 1
+            return created == 1 ? first : second
+        }
+        let firstReads = expectation(description: "first reads")
+        let secondReads = expectation(description: "second reads")
+        first.onSend = { object in
+            if object["method"] as? String == "initialize" {
+                first.respondJSON(jsonRPCResult(id: 1, result: ["ok": true]))
+            } else if object["method"] as? String == "account/rateLimits/read" {
+                first.respondJSON(jsonRPCResult(id: 3, result: oneWindowResult()))
+                firstReads.fulfill()
+            }
+        }
+        second.onSend = { object in
+            if object["method"] as? String == "initialize" {
+                second.respondJSON(jsonRPCResult(id: 1, result: ["ok": true]))
+            } else if object["method"] as? String == "account/rateLimits/read" {
+                second.respondJSON(jsonRPCResult(id: 3, result: oneWindowResult()))
+                secondReads.fulfill()
+            }
+        }
+        let finished = expectation(description: "retry failure")
+        var failure: CodexFailure?
+        client.poll(executable: "/tmp/fake-codex", appVersion: "0.1.0") { result in
+            if case .failure(let value) = result {
+                failure = value
+            }
+            finished.fulfill()
+        }
+        wait(for: [firstReads], timeout: 1.0)
+        queue.sync {
+            clock.advance(CodexAppServerClient.readTimeout)
+        }
+        wait(for: [secondReads], timeout: 1.0)
+        queue.sync {
+            clock.advance(CodexAppServerClient.readTimeout)
+        }
+        wait(for: [finished], timeout: 1.0)
+        XCTAssertEqual(factory.sessions.count, 2)
+        XCTAssertEqual(failure, .timeout)
+        XCTAssertTrue(second.aborted)
+    }
+
     private func makeClient() -> (CodexAppServerClient, ScriptedCodexFactory, ManualCodexClock, DispatchQueue) {
         let queue = DispatchQueue(label: "test.codex.client")
         let factory = ScriptedCodexFactory()

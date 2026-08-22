@@ -228,21 +228,17 @@ final class CodexUsageNormalizerTests: XCTestCase {
         }
     }
 
-    func testInvalidWindowFieldsAreUnavailableAndUnknownOptionalsAreIgnored() throws {
+    func testUnknownOptionalsAreIgnoredOnValidWindows() throws {
         let windows = try CodexUsageNormalizer.windows(from: [
             "rateLimits": [
                 "limitId": "codex",
                 "primary": [
-                    "usedPercent": 101,
-                    "windowDurationMins": 60,
-                    "resetsAt": 100,
-                ],
-                "secondary": [
                     "usedPercent": 10,
                     "windowDurationMins": 300,
                     "resetsAt": 200,
                     "mystery": "ignore-me",
                 ],
+                "secondary": NSNull(),
                 "credits": ["hasCredits": true, "balance": "12.5"],
                 "rateLimitReachedType": NSNull(),
             ]
@@ -251,12 +247,69 @@ final class CodexUsageNormalizerTests: XCTestCase {
             windows,
             [
                 UsageWindowObservation(
-                    slot: .secondary,
+                    slot: .primary,
                     usedPercent: 10,
                     windowDurationMins: 300,
                     resetsAt: 200
                 )
             ]
         )
+    }
+
+    func testNonNullMalformedWindowsAreSchemaInvalid() {
+        let cases: [[String: Any]] = [
+            [
+                "rateLimits": [
+                    "limitId": "codex",
+                    "primary": [
+                        "usedPercent": 101,
+                        "windowDurationMins": 60,
+                        "resetsAt": 100,
+                    ],
+                    "secondary": NSNull(),
+                ]
+            ],
+            [
+                "rateLimits": [
+                    "limitId": "codex",
+                    "primary": [
+                        "usedPercent": 10,
+                        "windowDurationMins": 300,
+                        "resetsAt": 200,
+                    ],
+                    "secondary": [
+                        "usedPercent": "full",
+                        "windowDurationMins": 60,
+                        "resetsAt": 100,
+                    ],
+                ]
+            ],
+            [
+                "rateLimits": [
+                    "limitId": "codex",
+                    "primary": 12,
+                    "secondary": NSNull(),
+                ]
+            ],
+            [
+                "rateLimits": [
+                    "limitId": "codex",
+                    "primary": [
+                        "usedPercent": 10,
+                        "windowDurationMins": 0,
+                        "resetsAt": 200,
+                    ],
+                    "secondary": NSNull(),
+                ]
+            ],
+        ]
+        for payload in cases {
+            switch CodexUsageNormalizer.windows(from: payload) {
+            case .failure(.schemaInvalid):
+                break
+            case let other:
+                XCTFail("malformed window must be schemaInvalid, got \(other) for \(payload)")
+            }
+        }
     }
 }
