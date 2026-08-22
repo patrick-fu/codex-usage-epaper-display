@@ -120,7 +120,8 @@ final class ActivityIngestionTests: XCTestCase {
         let (_, observation) = ActivityFixtures.ingest(home: home, root: root, now: now)
         XCTAssertEqual(observation.coverageComplete, false)
         XCTAssertEqual(observation.failure, "sourceMalformed")
-        XCTAssertEqual(observation.todayTokens, 0)
+        XCTAssertNil(observation.todayTokens)
+        XCTAssertEqual(try ActivityStore(root: root).loadFactsForTests().count, 0)
     }
 
     func testFutureTimestampBeyondFiveMinutesIsRejected() throws {
@@ -136,8 +137,38 @@ final class ActivityIngestionTests: XCTestCase {
         )
         let (_, observation) = ActivityFixtures.ingest(home: home, root: root, now: now)
         XCTAssertEqual(observation.failure, "sourceMalformed")
-        XCTAssertEqual(observation.todayTokens, 0)
+        XCTAssertNil(observation.todayTokens)
         XCTAssertEqual(observation.coverageComplete, false)
+        XCTAssertEqual(try ActivityStore(root: root).loadFactsForTests().count, 0)
+    }
+
+    func testMalformedScanRetainsPriorTokensAndDoesNotApply() throws {
+        let home = try ActivityFixtures.makeHome()
+        let root = try ActivityFixtures.makeStoreRoot()
+        addTeardownBlock { try? FileManager.default.removeItem(at: home); try? FileManager.default.removeItem(at: root) }
+        let now = Date(timeIntervalSince1970: 1_787_356_800)
+        let url = try ActivityFixtures.writeRollout(
+            home: home,
+            layer: .sessions,
+            basename: ActivityFixtures.rolloutName(),
+            lines: [ActivityFixtures.tokenLine(timestamp: "2026-08-22T00:00:00.000Z", input: 10, output: 2)]
+        )
+        let (store, first) = ActivityFixtures.ingest(home: home, root: root, now: now)
+        XCTAssertEqual(first.todayTokens, 12)
+        try Data((ActivityFixtures.tokenLine(timestamp: "2026-08-22T01:00:00.000Z", input: 99, output: 9) + "\n").utf8).write(to: url)
+        let rejected = store.ingest(
+            codexHome: home,
+            pollStart: now,
+            now: now,
+            calendar: ActivityFixtures.calendar(timeZone: TimeZone(secondsFromGMT: 0)!),
+            timeZone: TimeZone(secondsFromGMT: 0)!,
+            tpsWindowMinutes: 15,
+            prior: first
+        )
+        XCTAssertEqual(rejected.todayTokens, 12)
+        XCTAssertEqual(rejected.failure, "sourceMalformed")
+        XCTAssertEqual(try store.loadFactsForTests().count, 1)
+        XCTAssertEqual(try store.loadFactsForTests().first?.inputDelta, 10)
     }
 
     func testActiveThenArchiveDoesNotDuplicateFacts() throws {

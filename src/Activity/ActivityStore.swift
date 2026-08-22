@@ -115,11 +115,7 @@ final class ActivityStore: @unchecked Sendable {
             limits: limits
         )
         if plan.status == .budgetExhausted {
-            var retained = prior
-            retained.availability = prior.todayTokens == nil ? .unavailable : prior.availability
-            retained.failure = "sourceScanTimeout"
-            retained.coverageComplete = false
-            return retained
+            return retainedObservation(prior: prior, failure: "sourceScanTimeout")
         }
         if !plan.rootsExisted {
             if prior.todayTokens == nil {
@@ -127,13 +123,13 @@ final class ActivityStore: @unchecked Sendable {
             }
             return prior
         }
+        if !plan.commitsResults {
+            return retainedObservation(prior: prior, failure: plan.failure ?? "unknown")
+        }
         do {
             try apply(plan, now: now)
         } catch {
-            var retained = prior
-            retained.failure = "unknown"
-            retained.coverageComplete = false
-            return retained
+            return retainedObservation(prior: prior, failure: "unknown")
         }
         guard let totals = try? queryTotals(
             now: now,
@@ -178,6 +174,16 @@ final class ActivityStore: @unchecked Sendable {
     func loadFactsForTests() throws -> [ActivityFactRecord] {
         try openOrRebuild()
         return try loadFacts()
+    }
+
+    private func retainedObservation(prior: LocalActivityObservation, failure: String) -> LocalActivityObservation {
+        var retained = prior
+        retained.failure = failure
+        retained.coverageComplete = false
+        if prior.todayTokens == nil {
+            retained.availability = prior.availability == .unknown ? .unknown : .unavailable
+        }
+        return retained
     }
 
     private func unavailableObservation(prior: LocalActivityObservation) -> LocalActivityObservation {

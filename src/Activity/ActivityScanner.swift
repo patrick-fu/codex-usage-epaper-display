@@ -2,11 +2,11 @@ import CryptoKit
 import Darwin
 import Foundation
 
-@_silgen_name("fcntl")
-private func usageInkFcntl(
+@_silgen_name("usage_ink_fcntl_getpath")
+private func usageInkGetPath(
     _ fd: Int32,
-    _ cmd: Int32,
-    _ ptr: UnsafeMutableRawPointer?
+    _ buf: UnsafeMutablePointer<CChar>,
+    _ buflen: Int32
 ) -> Int32
 
 enum ActivityScanner {
@@ -26,24 +26,21 @@ enum ActivityScanner {
             budget: budget
         )
         if first.status == .budgetExhausted {
-            return first
+            return first.discardingUncommittedResults()
         }
-        if first.failure == "sourceUnreadable" || first.failure == "sourcePermissionDenied" {
-            if budget.hasRoom, first.status != .committed || !first.coverageComplete {
-                let retryBudget = ScanBudget(limits: limits, consumed: budget)
-                let retry = scanOnce(
-                    codexHome: codexHome,
-                    existingCursors: existingCursors,
-                    pollStart: pollStart,
-                    now: now,
-                    budget: retryBudget
-                )
-                if retry.status != .budgetExhausted {
-                    return retry
-                }
-            }
+        let retryable = first.failure == "sourceUnreadable" || first.failure == "sourcePermissionDenied"
+        if retryable, budget.hasRoom, !first.coverageComplete {
+            let retryBudget = ScanBudget(limits: limits, consumed: budget)
+            let retry = scanOnce(
+                codexHome: codexHome,
+                existingCursors: existingCursors,
+                pollStart: pollStart,
+                now: now,
+                budget: retryBudget
+            )
+            return retry.discardingUncommittedResults()
         }
-        return first
+        return first.discardingUncommittedResults()
     }
 
     private static func scanOnce(
@@ -179,7 +176,7 @@ enum ActivityScanner {
             }
         }
 
-        return .init(
+        return ActivityScanPlan(
             status: .committed,
             coverageComplete: coverageComplete,
             failure: coverageComplete ? nil : failure,
@@ -187,7 +184,7 @@ enum ActivityScanner {
             facts: facts,
             cursors: cursors,
             rootsExisted: true
-        )
+        ).discardingUncommittedResults()
     }
 
     private static func mergeWinner(_ candidate: Candidate, into winners: inout [String: Candidate]) {
@@ -254,7 +251,12 @@ enum ActivityScanner {
             if failure == nil { failure = "sourceUnreadable" }
             return .rejected
         }
-        let rootReal = filePath(for: rootFd) ?? path
+        guard let rootReal = filePath(for: rootFd) else {
+            close(rootFd)
+            coverageComplete = false
+            if failure == nil { failure = "sourceUnreadable" }
+            return .rejected
+        }
         var visited: Set<FileIdentity> = [FileIdentity(stat: opened)]
         var candidates: [Candidate] = []
         let walk = walkDirectory(
@@ -444,10 +446,11 @@ enum ActivityScanner {
               opened.st_ino == candidate.inode else {
             return .rejected("sourceUnreadable")
         }
-        if let real = filePath(for: fileFd) {
-            if real != candidate.rootPath && !real.hasPrefix(candidate.rootPath + "/") {
-                return .rejected("sourceUnreadable")
-            }
+        guard let real = filePath(for: fileFd) else {
+            return .rejected("sourceUnreadable")
+        }
+        if real != candidate.rootPath && !real.hasPrefix(candidate.rootPath + "/") {
+            return .rejected("sourceUnreadable")
         }
         if opened.st_nlink > 1 {
             return .rejected("sourceUnreadable")
@@ -605,10 +608,14 @@ enum ActivityScanner {
 
         while true {
             if budget.exhausted { return .exhausted }
+            let toRead = min(buffer.count, budget.remainingBytes)
+            if toRead == 0 { return .exhausted }
+            if !budget.consumeBytes(toRead) { return .exhausted }
             let n = buffer.withUnsafeMutableBytes { raw in
-                pread(fd, raw.baseAddress, raw.count, offset)
+                pread(fd, raw.baseAddress, toRead, offset)
             }
             if n < 0 {
+                budget.refundBytes(toRead)
                 if errno == EINTR { continue }
                 return .result(
                     ParsedFile(
@@ -621,8 +628,13 @@ enum ActivityScanner {
                     )
                 )
             }
-            if n == 0 { break }
-            if !budget.consumeBytes(n) { return .exhausted }
+            if n == 0 {
+                budget.refundBytes(toRead)
+                break
+            }
+            if n < toRead {
+                budget.refundBytes(toRead - n)
+            }
             offset += Int64(n)
             leftover.append(contentsOf: buffer.prefix(n))
             while let newline = leftover.firstIndex(of: 0x0A) {
@@ -710,29 +722,28 @@ enum ActivityScanner {
         if length == 0 {
             return SHA256.hash(data: Data()).map { String(format: "%02x", $0) }.joined()
         }
-        if budget.exhausted { return nil }
-        var data = Data(count: Int(length))
+        let planned = Int(length)
+        if planned > budget.remainingBytes { return nil }
+        if !budget.consumeBytes(planned) { return nil }
+        var data = Data(count: planned)
         let start = newlineOffset - length
         let n = data.withUnsafeMutableBytes { raw in
-            pread(fd, raw.baseAddress, Int(length), start)
+            pread(fd, raw.baseAddress, planned, start)
         }
-        if n != length {
+        if n != planned {
             return nil
         }
-        if !budget.consumeBytes(Int(n)) { return nil }
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     private static func filePath(for fd: Int32) -> String? {
-        var buffer = [UInt8](repeating: 0, count: Int(PATH_MAX))
-        let status = buffer.withUnsafeMutableBytes { raw in
-            usageInkFcntl(fd, F_GETPATH, raw.baseAddress)
+        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
+        let status = buffer.withUnsafeMutableBufferPointer { pointer in
+            guard let base = pointer.baseAddress else { return Int32(-1) }
+            return usageInkGetPath(fd, base, Int32(pointer.count))
         }
         guard status == 0 else { return nil }
-        if let end = buffer.firstIndex(of: 0) {
-            return String(decoding: buffer[..<end], as: UTF8.self)
-        }
-        return String(decoding: buffer, as: UTF8.self)
+        return String(cString: buffer)
     }
 
     private static func openRelative(rootFd: Int32, relative: String) -> Int32 {
@@ -787,8 +798,12 @@ private final class ScanBudget {
         bytes = consumed?.bytes ?? 0
     }
 
+    var remainingBytes: Int {
+        max(0, maxBytes - bytes)
+    }
+
     var exhausted: Bool {
-        Date() >= deadline || files > maxFiles || bytes > maxBytes
+        Date() >= deadline || files > maxFiles || remainingBytes == 0
     }
 
     var hasRoom: Bool {
@@ -801,7 +816,14 @@ private final class ScanBudget {
     }
 
     func consumeBytes(_ count: Int) -> Bool {
+        guard count >= 0, Date() < deadline, count <= remainingBytes else {
+            return false
+        }
         bytes += count
-        return !exhausted && Date() < deadline
+        return true
+    }
+
+    func refundBytes(_ count: Int) {
+        bytes = max(0, bytes - max(0, count))
     }
 }

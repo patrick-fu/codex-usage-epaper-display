@@ -61,10 +61,70 @@ final class ActivityDiscoveryTests: XCTestCase {
             .appendingPathComponent(ActivityFixtures.rolloutName(timestamp: "2026-08-22T04-00-00-", uuid: "cccccccc-dddd-eeee-ffff-000000000000"))
         XCTAssertEqual(other.path.withCString { src in hardURL.path.withCString { dst in Darwin.link(src, dst) } }, 0)
         let (_, observation) = ActivityFixtures.ingest(home: home, root: root, now: now)
-        XCTAssertEqual(observation.todayTokens, 22)
+        XCTAssertNil(observation.todayTokens)
         XCTAssertEqual(observation.coverageComplete, false)
         XCTAssertEqual(observation.failure, "sourceUnreadable")
-        XCTAssertFalse((try ActivityStore(root: root).loadFactsForTests()).contains { $0.sourceKey != ActivityFixtures.sourceKeyA })
+        XCTAssertEqual(try ActivityStore(root: root).loadFactsForTests().count, 0)
+    }
+
+    func testCoverageRejectionRollsBackAndRetainsPriorTokens() throws {
+        let home = try ActivityFixtures.makeHome()
+        let root = try ActivityFixtures.makeStoreRoot()
+        addTeardownBlock { try? FileManager.default.removeItem(at: home); try? FileManager.default.removeItem(at: root) }
+        let now = Date(timeIntervalSince1970: 1_787_356_800)
+        try ActivityFixtures.writeRollout(
+            home: home,
+            layer: .sessions,
+            basename: ActivityFixtures.rolloutName(uuid: ActivityFixtures.uuidA),
+            lines: [ActivityFixtures.tokenLine(timestamp: "2026-08-22T00:00:00.000Z", input: 20, output: 2)]
+        )
+        let (store, first) = ActivityFixtures.ingest(home: home, root: root, now: now)
+        XCTAssertEqual(first.todayTokens, 22)
+        let extra = try ActivityFixtures.writeRollout(
+            home: home,
+            layer: .sessions,
+            basename: ActivityFixtures.rolloutName(timestamp: "2026-08-22T01-00-00-", uuid: ActivityFixtures.uuidB),
+            lines: [ActivityFixtures.tokenLine(timestamp: "2026-08-22T00:00:00.000Z", input: 9, output: 1)]
+        )
+        let symlinkURL = home.appendingPathComponent("sessions")
+            .appendingPathComponent(ActivityFixtures.rolloutName(timestamp: "2026-08-22T03-00-00-", uuid: ActivityFixtures.uuidB))
+        XCTAssertEqual(extra.path.withCString { src in symlinkURL.path.withCString { dst in symlink(src, dst) } }, 0)
+        let rejected = store.ingest(
+            codexHome: home,
+            pollStart: now,
+            now: now,
+            calendar: ActivityFixtures.calendar(timeZone: TimeZone(secondsFromGMT: 0)!),
+            timeZone: TimeZone(secondsFromGMT: 0)!,
+            tpsWindowMinutes: 15,
+            prior: first
+        )
+        XCTAssertEqual(rejected.todayTokens, 22)
+        XCTAssertEqual(rejected.failure, "sourceUnreadable")
+        XCTAssertEqual(rejected.coverageComplete, false)
+        XCTAssertEqual(try store.loadFactsForTests().count, 1)
+        XCTAssertEqual(try store.loadFactsForTests().first?.sourceKey, ActivityFixtures.sourceKeyA)
+    }
+
+    func testByteBudgetIsChargedBeforeReadAndIncludesChecksum() throws {
+        let home = try ActivityFixtures.makeHome()
+        let root = try ActivityFixtures.makeStoreRoot()
+        addTeardownBlock { try? FileManager.default.removeItem(at: home); try? FileManager.default.removeItem(at: root) }
+        let now = Date(timeIntervalSince1970: 1_787_356_800)
+        try ActivityFixtures.writeRollout(
+            home: home,
+            layer: .sessions,
+            basename: ActivityFixtures.rolloutName(),
+            lines: [ActivityFixtures.tokenLine(timestamp: "2026-08-22T00:00:00.000Z", input: 30, output: 3)]
+        )
+        let (_, observation) = ActivityFixtures.ingest(
+            home: home,
+            root: root,
+            now: now,
+            limits: ActivityScanLimits(maxWallTime: 8, maxFiles: 512, maxBytes: 16)
+        )
+        XCTAssertEqual(observation.failure, "sourceScanTimeout")
+        XCTAssertNil(observation.todayTokens)
+        XCTAssertEqual(try ActivityStore(root: root).loadFactsForTests().count, 0)
     }
 
     func testBudgetExhaustionRollsBackAndRetainsPriorObservation() throws {

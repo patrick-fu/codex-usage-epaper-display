@@ -92,6 +92,25 @@ struct ActivityScanPlan: Sendable, Equatable {
     var facts: [ActivityFactRecord]
     var cursors: [SourceCursorRecord]
     var rootsExisted: Bool
+
+    var commitsResults: Bool {
+        guard status == .committed else { return false }
+        switch failure {
+        case nil, "sourcePartialTail", "sourceRollbackRebuild":
+            return true
+        default:
+            return false
+        }
+    }
+
+    func discardingUncommittedResults() -> ActivityScanPlan {
+        guard !commitsResults else { return self }
+        var copy = self
+        copy.rebuildSourceKeys = []
+        copy.facts = []
+        copy.cursors = []
+        return copy
+    }
 }
 
 struct LocalTotals: Sendable, Equatable {

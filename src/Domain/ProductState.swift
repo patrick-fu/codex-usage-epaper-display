@@ -66,18 +66,29 @@ struct LocalActivitySourceRecord: Sendable, Equatable {
         prior: LocalActivitySourceRecord
     ) -> LocalActivitySourceRecord {
         let lastSuccess: Int?
-        if observation.failure == "sourceScanTimeout" {
-            lastSuccess = prior.lastSuccessfulObservationAt
-        } else if observation.todayTokens == nil {
-            lastSuccess = nil
+        if Self.stampsObservationTime(observation) {
+            if observation.todayTokens == nil {
+                lastSuccess = nil
+            } else {
+                lastSuccess = Int(timestamp.timeIntervalSince1970.rounded(.towardZero))
+            }
         } else {
-            lastSuccess = Int(timestamp.timeIntervalSince1970.rounded(.towardZero))
+            lastSuccess = prior.lastSuccessfulObservationAt
         }
         return LocalActivitySourceRecord(
             lastSuccessfulObservationAt: lastSuccess,
             availability: observation.availability,
             failure: observation.failure
         )
+    }
+
+    static func stampsObservationTime(_ observation: LocalActivityObservation) -> Bool {
+        switch observation.failure {
+        case nil, "sourcePartialTail", "sourceRollbackRebuild":
+            return true
+        default:
+            return false
+        }
     }
 }
 

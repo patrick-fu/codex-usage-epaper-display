@@ -167,5 +167,36 @@ final class LocalActivityObservationTests: XCTestCase {
             prior: prior
         )
         XCTAssertEqual(committed.lastSuccessfulObservationAt, 1_787_356_800 + 600)
+        let unreadable = LocalActivityObservation(
+            availability: .fresh,
+            failure: "sourceUnreadable",
+            todayTokens: 33,
+            weekTokens: 33,
+            cacheHitRate: nil,
+            tps: 0,
+            coverageComplete: false
+        )
+        let blocked = LocalActivitySourceRecord.capturing(
+            observation: unreadable,
+            at: later,
+            prior: prior
+        )
+        XCTAssertEqual(blocked.lastSuccessfulObservationAt, 1_787_356_800)
+        XCTAssertEqual(blocked.failure, "sourceUnreadable")
+        let malformed = LocalActivityObservation(
+            availability: .fresh,
+            failure: "sourceMalformed",
+            todayTokens: 33,
+            weekTokens: 33,
+            cacheHitRate: nil,
+            tps: 0,
+            coverageComplete: false
+        )
+        let malformedRecord = LocalActivitySourceRecord.capturing(
+            observation: malformed,
+            at: later,
+            prior: prior
+        )
+        XCTAssertEqual(malformedRecord.lastSuccessfulObservationAt, 1_787_356_800)
     }
 }
