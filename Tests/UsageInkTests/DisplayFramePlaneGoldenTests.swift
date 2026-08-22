@@ -39,6 +39,45 @@ final class DisplayFramePlaneGoldenTests: XCTestCase {
         assertDigest(frame, black: DisplayFramePlaneGoldens.staleBlackSHA256, red: DisplayFramePlaneGoldens.staleRedSHA256, label: "stale")
     }
 
+    func testBalancedTypicalFixturePlaneDigestAndMargins() throws {
+        var preferences = DisplayPreferences.default
+        preferences.displayStyle = .balanced
+        let frame = try DisplayFrameComposer.compose(DisplayFrameFixtures.input(preferences: preferences))
+        assertPlaneShape(frame)
+        XCTAssertEqual(DisplayFrameFixtures.ink(atX: 15, y: 150, frame: frame), .paper)
+        XCTAssertEqual(DisplayFrameFixtures.ink(atX: 16, y: Int(BalancedLayout.titleRuleRect.minY), frame: frame), .black)
+        XCTAssertTrue(DisplayFrameFixtures.contains(.red, in: BalancedLayout.bodyRect, frame: frame))
+        assertDigest(
+            frame,
+            black: DisplayFramePlaneGoldens.balancedValidBlackSHA256,
+            red: DisplayFramePlaneGoldens.balancedValidRedSHA256,
+            label: "balanced-valid"
+        )
+    }
+
+    func testActivityFocusTypicalFixturePlaneDigestAndQuotaPlacement() throws {
+        var preferences = DisplayPreferences.default
+        preferences.displayStyle = .activityFocus
+        let frame = try DisplayFrameComposer.compose(DisplayFrameFixtures.input(preferences: preferences))
+        assertPlaneShape(frame)
+        XCTAssertEqual(DisplayFrameFixtures.ink(atX: 13, y: 150, frame: frame), .paper)
+        let quotas = ActivityFocusLayout.quotaRects(count: 2)
+        XCTAssertTrue(DisplayFrameFixtures.contains(.red, in: quotas[1], frame: frame))
+        XCTAssertFalse(
+            DisplayFrameFixtures.contains(
+                .red,
+                in: ActivityFocusLayout.primaryRect(hasSecondary: true, hasQuotas: true),
+                frame: frame
+            )
+        )
+        assertDigest(
+            frame,
+            black: DisplayFramePlaneGoldens.activityValidBlackSHA256,
+            red: DisplayFramePlaneGoldens.activityValidRedSHA256,
+            label: "activity-valid"
+        )
+    }
+
     func testUnavailableFixtureHasNoQuotaProgressAndNoRedAccent() throws {
         var preferences = DisplayPreferences.default
         preferences.modules.quota = false
@@ -140,4 +179,8 @@ enum DisplayFramePlaneGoldens {
     static let staleRedSHA256 = "74de3553ba1a1a9109c0fc8fb201c27cb383555dbc52f6a97b5f3fb829c2885b"
     static let unavailableBlackSHA256 = "74f8daf673ff1f02a5c6dd0730b1490b38fb7f68f287d666ec5a5d7f934655b1"
     static let unavailableRedSHA256 = "bfc5b164e72195f43728bf37b07bce2be21f37d3169c62437c342ce397a9826f"
+    static let balancedValidBlackSHA256 = "db3a692e8775dcada1fd43333fdd6a1f905cf039ad59a67847c09e858886e4c0"
+    static let balancedValidRedSHA256 = "159b06f13bfd71150af45cb69851eceaaeb77ad6e82ff1af9c0f83db4aed2592"
+    static let activityValidBlackSHA256 = "c79d31c2cd824a2a25b7b2b84b1197a573ee96c5774b01718fe1d864098b5b86"
+    static let activityValidRedSHA256 = "530f6def81a4ac6456f6b47c6d61f1657ec155163e782ddda390b1f64cfdcacc"
 }

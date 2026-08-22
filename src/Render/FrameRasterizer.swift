@@ -4,6 +4,18 @@ import Foundation
 
 enum FrameRasterizer {
     static func rasterize(_ model: QuotaFocusFrameModel) -> DisplayPlanes {
+        rasterize { draw(model, in: $0) }
+    }
+
+    static func rasterize(_ model: BalancedFrameModel) -> DisplayPlanes {
+        rasterize { draw(model, in: $0) }
+    }
+
+    static func rasterize(_ model: ActivityFocusFrameModel) -> DisplayPlanes {
+        rasterize { draw(model, in: $0) }
+    }
+
+    private static func rasterize(_ draw: (CGContext) -> Void) -> DisplayPlanes {
         let width = PlaneEncoder.width
         let height = PlaneEncoder.height
         var buffer = [UInt8](repeating: 255, count: width * height * 4)
@@ -24,7 +36,7 @@ enum FrameRasterizer {
             ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
             ctx.saveGState()
             ctx.clip(to: CGRect(x: 0, y: 0, width: width, height: height))
-            draw(model, in: ctx)
+            draw(ctx)
             ctx.restoreGState()
         }
         return PlaneEncoder.encode { x, y in
@@ -57,6 +69,382 @@ enum FrameRasterizer {
         }
         drawTicker(model.ticker, in: ctx, languageCode: lang)
         drawFooter(model, in: ctx, languageCode: lang)
+    }
+
+    private static func draw(
+        _ model: BalancedFrameModel,
+        in ctx: CGContext
+    ) {
+        ctx.clip(to: cgRect(BalancedLayout.contentRect))
+        let lang = DisplayCopy.languageCode(model.language)
+        drawChromeHeader(
+            title: model.title,
+            plan: model.plan,
+            showPlan: model.showPlan,
+            titleRect: BalancedLayout.titleRect,
+            titleRule: BalancedLayout.titleRuleRect,
+            titleFontSize: BalancedLayout.titleFontSize,
+            languageCode: lang,
+            ctx: ctx
+        )
+        if model.entries.isEmpty, let mark = model.unavailableMark {
+            drawCentered(
+                mark,
+                font: font(size: BalancedLayout.metricValueFontSize, languageCode: lang, heavy: true, monoDigits: false),
+                color: black,
+                in: BalancedLayout.bodyRect,
+                ctx: ctx
+            )
+        } else {
+            drawBalancedEntries(model.entries, in: ctx, languageCode: lang)
+        }
+        drawChromeFooter(
+            updated: model.footerUpdated,
+            status: model.footerStatus,
+            rect: BalancedLayout.footerRect,
+            fontSize: BalancedLayout.footerFontSize,
+            languageCode: lang,
+            ctx: ctx
+        )
+    }
+
+    private static func draw(
+        _ model: ActivityFocusFrameModel,
+        in ctx: CGContext
+    ) {
+        ctx.clip(to: cgRect(ActivityFocusLayout.contentRect))
+        let lang = DisplayCopy.languageCode(model.language)
+        drawChromeHeader(
+            title: model.title,
+            plan: model.plan,
+            showPlan: model.showPlan,
+            titleRect: ActivityFocusLayout.titleRect,
+            titleRule: ActivityFocusLayout.titleRuleRect,
+            titleFontSize: ActivityFocusLayout.titleFontSize,
+            languageCode: lang,
+            ctx: ctx
+        )
+        let hasLocals = model.primary != nil || !model.secondary.isEmpty
+        let hasQuotas = !model.quotas.isEmpty
+        let hasSecondary = !model.secondary.isEmpty
+        if !hasLocals && !hasQuotas, let mark = model.unavailableMark {
+            drawCentered(
+                mark,
+                font: font(size: ActivityFocusLayout.secondaryValueFontSize, languageCode: lang, heavy: true, monoDigits: false),
+                color: black,
+                in: ActivityFocusLayout.bodyRect,
+                ctx: ctx
+            )
+        } else {
+            if hasLocals {
+                let local = ActivityFocusLayout.localRegionRect(hasLocals: true, hasQuotas: hasQuotas)
+                fillRule(
+                    CGRect(x: local.minX, y: local.minY, width: local.width, height: ActivityFocusLayout.strongRule),
+                    ctx: ctx
+                )
+                fillRule(
+                    CGRect(x: local.minX, y: local.maxY - ActivityFocusLayout.strongRule, width: local.width, height: ActivityFocusLayout.strongRule),
+                    ctx: ctx
+                )
+                fillRule(
+                    CGRect(x: local.minX, y: local.minY, width: ActivityFocusLayout.strongRule, height: local.height),
+                    ctx: ctx
+                )
+                fillRule(
+                    CGRect(x: local.maxX - ActivityFocusLayout.strongRule, y: local.minY, width: ActivityFocusLayout.strongRule, height: local.height),
+                    ctx: ctx
+                )
+                if let primary = model.primary {
+                    drawMetricCell(
+                        primary,
+                        in: ActivityFocusLayout.primaryRect(hasSecondary: hasSecondary, hasQuotas: hasQuotas),
+                        valueSize: ActivityFocusLayout.primaryValueFontSize,
+                        labelSize: ActivityFocusLayout.metricLabelFontSize,
+                        inset: ActivityFocusLayout.cellInset,
+                        languageCode: lang,
+                        ctx: ctx
+                    )
+                }
+                let secondaryRects = ActivityFocusLayout.secondaryRects(count: model.secondary.count, hasQuotas: hasQuotas)
+                for (index, field) in model.secondary.enumerated() {
+                    let cell = secondaryRects[index]
+                    if index == 0 {
+                        fillRule(
+                            CGRect(
+                                x: cell.minX,
+                                y: local.minY + ActivityFocusLayout.strongRule,
+                                width: ActivityFocusLayout.normalRule,
+                                height: local.height - 2 * ActivityFocusLayout.strongRule
+                            ),
+                            ctx: ctx
+                        )
+                    }
+                    if index > 0 {
+                        fillRule(
+                            CGRect(x: cell.minX, y: cell.minY, width: cell.width, height: ActivityFocusLayout.normalRule),
+                            ctx: ctx
+                        )
+                    }
+                    drawMetricCell(
+                        field,
+                        in: cell,
+                        valueSize: ActivityFocusLayout.secondaryValueFontSize,
+                        labelSize: ActivityFocusLayout.metricLabelFontSize,
+                        inset: ActivityFocusLayout.cellInset,
+                        languageCode: lang,
+                        ctx: ctx
+                    )
+                }
+            }
+            if hasQuotas {
+                if hasLocals {
+                    fillRule(ActivityFocusLayout.quotaTopRuleRect(hasLocals: true), ctx: ctx)
+                }
+                let quotaRects = ActivityFocusLayout.quotaRects(count: model.quotas.count, hasLocals: hasLocals)
+                for (index, field) in model.quotas.enumerated() {
+                    let cell = quotaRects[index]
+                    if index > 0 {
+                        fillRule(
+                            CGRect(
+                                x: cell.minX,
+                                y: cell.minY + (hasLocals ? ActivityFocusLayout.strongRule : 0),
+                                width: ActivityFocusLayout.normalRule,
+                                height: cell.height - (hasLocals ? ActivityFocusLayout.strongRule : 0)
+                            ),
+                            ctx: ctx
+                        )
+                    }
+                    drawQuotaCell(
+                        field,
+                        in: cell,
+                        languageCode: lang,
+                        ctx: ctx,
+                        inset: ActivityFocusLayout.cellInset
+                    )
+                }
+            }
+        }
+        drawChromeFooter(
+            updated: model.footerUpdated,
+            status: model.footerStatus,
+            rect: ActivityFocusLayout.footerRect,
+            fontSize: ActivityFocusLayout.footerFontSize,
+            languageCode: lang,
+            ctx: ctx
+        )
+    }
+
+    private static func drawBalancedEntries(
+        _ fields: [DisplayField],
+        in ctx: CGContext,
+        languageCode: String
+    ) {
+        let cells = BalancedLayout.entryRects(count: fields.count)
+        for (index, field) in fields.enumerated() {
+            let cell = cells[index]
+            if index % BalancedLayout.columnCount == 1 {
+                fillRule(
+                    CGRect(x: cell.minX, y: cell.minY, width: BalancedLayout.normalRule, height: cell.height),
+                    ctx: ctx
+                )
+            }
+            if index >= BalancedLayout.columnCount {
+                fillRule(
+                    CGRect(x: cell.minX, y: cell.minY, width: cell.width, height: BalancedLayout.normalRule),
+                    ctx: ctx
+                )
+            }
+            if field.isQuota {
+                drawQuotaCell(
+                    field,
+                    in: cell,
+                    languageCode: languageCode,
+                    ctx: ctx,
+                    inset: BalancedLayout.cellInset,
+                    quotaValueSize: BalancedLayout.quotaValueFontSize
+                )
+            } else {
+                drawMetricCell(
+                    field,
+                    in: cell,
+                    valueSize: BalancedLayout.metricValueFontSize,
+                    labelSize: BalancedLayout.metricLabelFontSize,
+                    inset: BalancedLayout.cellInset,
+                    languageCode: languageCode,
+                    ctx: ctx
+                )
+            }
+        }
+    }
+
+    private static func drawQuotaCell(
+        _ field: DisplayField,
+        in cell: CGRect,
+        languageCode: String,
+        ctx: CGContext,
+        inset: Int,
+        quotaValueSize: CGFloat = ActivityFocusLayout.quotaValueFontSize
+    ) {
+        let content = DisplayCellGeometry.insetRect(in: cell, inset: inset)
+        let (labelRect, resetRect) = DisplayCellGeometry.splitLeadingRow(content, height: 14)
+        let ink = field.usesRed ? red : black
+        drawText(
+            field.label,
+            font: font(size: 11, languageCode: languageCode, heavy: true, monoDigits: false),
+            color: black,
+            in: labelRect,
+            align: .left,
+            ctx: ctx
+        )
+        if let secondary = field.secondaryText {
+            drawText(
+                secondary,
+                font: font(size: 9, languageCode: languageCode, heavy: false, monoDigits: false),
+                color: black,
+                in: resetRect,
+                align: .right,
+                ctx: ctx
+            )
+        }
+        var valueBottom = content.maxY
+        if let percent = field.progressPercent {
+            let track = CGRect(
+                x: content.minX,
+                y: content.maxY - 8,
+                width: content.width,
+                height: 8
+            )
+            drawProgress(percent: percent, in: track, fill: ink, ctx: ctx)
+            valueBottom = track.minY - 2
+        }
+        if let badge = field.badge {
+            let badgeRect = CGRect(x: content.minX, y: valueBottom - 12, width: content.width, height: 12)
+            drawText(
+                badge,
+                font: font(size: 9, languageCode: languageCode, heavy: false, monoDigits: false),
+                color: black,
+                in: badgeRect,
+                align: .left,
+                ctx: ctx
+            )
+            valueBottom = badgeRect.minY - 2
+        }
+        drawText(
+            field.displayedValue,
+            font: font(size: quotaValueSize, languageCode: languageCode, heavy: true, monoDigits: true),
+            color: ink,
+            in: CGRect(x: content.minX, y: content.minY + 16, width: content.width, height: max(0, valueBottom - (content.minY + 16))),
+            align: .left,
+            ctx: ctx
+        )
+    }
+
+    private static func drawMetricCell(
+        _ field: DisplayField,
+        in cell: CGRect,
+        valueSize: CGFloat,
+        labelSize: CGFloat,
+        inset: Int,
+        languageCode: String,
+        ctx: CGContext
+    ) {
+        let content = DisplayCellGeometry.insetRect(in: cell, inset: inset)
+        drawText(
+            field.label,
+            font: font(size: labelSize, languageCode: languageCode, heavy: true, monoDigits: false),
+            color: black,
+            in: CGRect(x: content.minX, y: content.minY, width: content.width, height: 14),
+            align: .left,
+            ctx: ctx
+        )
+        var valueBottom = content.maxY
+        if let badge = field.badge {
+            let badgeRect = CGRect(x: content.minX, y: content.maxY - 12, width: content.width, height: 12)
+            drawText(
+                badge,
+                font: font(size: 9, languageCode: languageCode, heavy: false, monoDigits: false),
+                color: black,
+                in: badgeRect,
+                align: .left,
+                ctx: ctx
+            )
+            valueBottom = badgeRect.minY - 2
+        }
+        drawText(
+            field.displayedValue,
+            font: font(size: valueSize, languageCode: languageCode, heavy: true, monoDigits: true),
+            color: black,
+            in: CGRect(x: content.minX, y: content.minY + 16, width: content.width, height: max(0, valueBottom - (content.minY + 16))),
+            align: .left,
+            ctx: ctx
+        )
+    }
+
+    private static func drawChromeHeader(
+        title: String,
+        plan: String?,
+        showPlan: Bool,
+        titleRect: CGRect,
+        titleRule: CGRect,
+        titleFontSize: CGFloat,
+        languageCode: String,
+        ctx: CGContext
+    ) {
+        let titleFont = font(size: titleFontSize, languageCode: languageCode, heavy: true, monoDigits: false)
+        let planFont = font(size: titleFontSize, languageCode: languageCode, heavy: false, monoDigits: true)
+        var titleWidth = titleRect.width
+        if showPlan, let plan {
+            let planWidth = min(120, titleRect.width * 0.4)
+            drawText(
+                plan,
+                font: planFont,
+                color: black,
+                in: CGRect(x: titleRect.maxX - planWidth, y: titleRect.minY, width: planWidth, height: titleRect.height - 4),
+                align: .right,
+                ctx: ctx
+            )
+            titleWidth = titleRect.width - planWidth - 8
+        }
+        drawText(
+            title,
+            font: titleFont,
+            color: black,
+            in: CGRect(x: titleRect.minX, y: titleRect.minY, width: titleWidth, height: titleRect.height - 4),
+            align: .left,
+            ctx: ctx
+        )
+        fillRule(titleRule, ctx: ctx)
+    }
+
+    private static func drawChromeFooter(
+        updated: String?,
+        status: String?,
+        rect: CGRect,
+        fontSize: CGFloat,
+        languageCode: String,
+        ctx: CGContext
+    ) {
+        let footerFont = font(size: fontSize, languageCode: languageCode, heavy: false, monoDigits: true)
+        if let updated {
+            drawText(
+                updated,
+                font: footerFont,
+                color: black,
+                in: CGRect(x: rect.minX, y: rect.minY, width: rect.width * 0.6, height: rect.height),
+                align: .left,
+                ctx: ctx
+            )
+        }
+        if let status {
+            drawText(
+                status,
+                font: footerFont,
+                color: black,
+                in: CGRect(x: rect.minX + rect.width * 0.4, y: rect.minY, width: rect.width * 0.6, height: rect.height),
+                align: .right,
+                ctx: ctx
+            )
+        }
     }
 
     private static func drawHeader(

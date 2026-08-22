@@ -291,8 +291,7 @@ final class SettingsPanelController: NSObject {
 
         if let pending = pendingSave,
            snapshot.storageClassification != .stateWriteFailed,
-           snapshot.preferences.displayStyle == pending.displayStyle,
-           snapshot.preferences.title == pending.title {
+           snapshot.preferences == pending {
             pendingSave = nil
             isDraftDirty = false
             apply(draft: snapshot.preferences, writable: snapshot.isPersistenceWritable, showDisclosure: snapshot.showsFirstRunDisclosure)

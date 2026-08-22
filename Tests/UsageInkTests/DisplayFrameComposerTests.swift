@@ -10,19 +10,73 @@ final class DisplayFrameComposerTests: XCTestCase {
         XCTAssertEqual(frame.fingerprint.count, 64)
     }
 
-    func testUnsupportedStylesDoNotRenderQuotaFocus() {
+    func testBalancedAndActivityFocusComposeFifteenThousandBytePlanes() throws {
         for style in [DisplayStyle.balanced, .activityFocus] {
             var preferences = DisplayPreferences.default
             preferences.displayStyle = style
-            XCTAssertThrowsError(
-                try DisplayFrameComposer.compose(DisplayFrameFixtures.input(preferences: preferences))
-            ) { error in
-                XCTAssertEqual(
-                    error as? DisplayFrameCompositionError,
-                    .unsupportedDisplayStyle(style)
-                )
-            }
+            let frame = try DisplayFrameComposer.compose(DisplayFrameFixtures.input(preferences: preferences))
+            XCTAssertEqual(frame.blackPlane.count, 15_000)
+            XCTAssertEqual(frame.redPlane.count, 15_000)
+            XCTAssertEqual(frame.fingerprint.count, 64)
         }
+    }
+
+    func testBalancedMarginsStayPaper() throws {
+        var preferences = DisplayPreferences.default
+        preferences.displayStyle = .balanced
+        let frame = try DisplayFrameComposer.compose(DisplayFrameFixtures.input(preferences: preferences))
+        for x in 0..<16 {
+            XCTAssertEqual(DisplayFrameFixtures.ink(atX: x, y: 150, frame: frame), .paper)
+        }
+        for x in 384..<400 {
+            XCTAssertEqual(DisplayFrameFixtures.ink(atX: x, y: 150, frame: frame), .paper)
+        }
+        for y in 0..<11 {
+            XCTAssertEqual(DisplayFrameFixtures.ink(atX: 200, y: y, frame: frame), .paper)
+        }
+        XCTAssertTrue(DisplayFrameFixtures.contains(.black, in: BalancedLayout.titleRect, frame: frame))
+        XCTAssertTrue(DisplayFrameFixtures.contains(.black, in: BalancedLayout.bodyRect, frame: frame))
+        XCTAssertTrue(DisplayFrameFixtures.contains(.black, in: BalancedLayout.footerRect, frame: frame))
+    }
+
+    func testActivityFocusRedAccentAppliesOnlyToQuotaCells() throws {
+        var always = DisplayPreferences.default
+        always.displayStyle = .activityFocus
+        always.redAccent = .always
+        let frame = try DisplayFrameComposer.compose(DisplayFrameFixtures.input(preferences: always))
+        let quota = ActivityFocusLayout.quotaRects(count: 2)[1]
+        XCTAssertTrue(DisplayFrameFixtures.contains(.red, in: quota, frame: frame))
+        let primary = ActivityFocusLayout.primaryRect(hasSecondary: true, hasQuotas: true)
+        XCTAssertFalse(DisplayFrameFixtures.contains(.red, in: primary, frame: frame))
+    }
+
+    func testActivityFocusWithoutLocalsFillsBodyWithQuotas() throws {
+        var preferences = DisplayPreferences.default
+        preferences.displayStyle = .activityFocus
+        preferences.modules.today = false
+        preferences.modules.weekTokens = false
+        preferences.modules.cache = false
+        preferences.modules.tps = false
+        let input = DisplayFrameFixtures.input(preferences: preferences)
+        let model = ActivityFocusModelBuilder.build(input)
+        XCTAssertNil(model.primary)
+        XCTAssertEqual(model.secondary, [])
+        XCTAssertFalse(model.quotas.isEmpty)
+        XCTAssertNil(model.unavailableMark)
+
+        let frame = try DisplayFrameComposer.compose(input)
+        let quotas = ActivityFocusLayout.quotaRects(count: 2, hasLocals: false)
+        XCTAssertEqual(quotas[0].minY, 41)
+        XCTAssertEqual(quotas[0].height, 223)
+        XCTAssertTrue(DisplayFrameFixtures.contains(.black, in: quotas[0], frame: frame))
+        XCTAssertTrue(DisplayFrameFixtures.contains(.red, in: quotas[1], frame: frame))
+
+        let abandonedLocal = ActivityFocusLayout.localRegionRect(hasLocals: true, hasQuotas: true)
+        XCTAssertTrue(
+            DisplayFrameFixtures.contains(.black, in: abandonedLocal, frame: frame),
+            "quota cells must occupy the former empty local band"
+        )
+        XCTAssertEqual(ActivityFocusLayout.localRegionHeight(hasLocals: false, hasQuotas: true), 0)
     }
 
     func testRedAccentAppliesOnlyToQuotaPercentageAndProgress() throws {
@@ -156,8 +210,33 @@ final class DisplayFrameComposerTests: XCTestCase {
         FileManager.default.createFile(atPath: marker.path, contents: Data("x".utf8))
         defer { try? FileManager.default.removeItem(at: marker) }
         let before = Set((try? FileManager.default.contentsOfDirectory(atPath: tmp.path)) ?? [])
-        _ = try DisplayFrameComposer.compose(DisplayFrameFixtures.input())
+        for style in DisplayStyle.allCases {
+            var preferences = DisplayPreferences.default
+            preferences.displayStyle = style
+            _ = try DisplayFrameComposer.compose(DisplayFrameFixtures.input(preferences: preferences))
+        }
         let after = Set((try? FileManager.default.contentsOfDirectory(atPath: tmp.path)) ?? [])
         XCTAssertEqual(after, before)
+    }
+
+    func testChineseCopyProducesInkForEveryStyle() throws {
+        for style in DisplayStyle.allCases {
+            var preferences = DisplayPreferences.default
+            preferences.displayStyle = style
+            preferences.language = .simplifiedChinese
+            let frame = try DisplayFrameComposer.compose(
+                DisplayFrameFixtures.input(preferences: preferences, preferredLanguages: ["zh-Hans"])
+            )
+            let rect: CGRect
+            switch style {
+            case .balanced:
+                rect = BalancedLayout.contentRect
+            case .quotaFocus:
+                rect = QuotaFocusLayout.contentRect
+            case .activityFocus:
+                rect = ActivityFocusLayout.contentRect
+            }
+            XCTAssertTrue(DisplayFrameFixtures.contains(.black, in: rect, frame: frame), style.rawValue)
+        }
     }
 }

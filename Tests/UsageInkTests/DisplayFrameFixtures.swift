@@ -31,6 +31,28 @@ enum DisplayFrameFixtures {
         )
     }
 
+    static func account(windowCount: Int) -> AccountObservation {
+        let typical = typicalAccount()
+        switch windowCount {
+        case 0:
+            return AccountObservation(
+                availability: typical.availability,
+                failure: typical.failure,
+                planType: typical.planType,
+                windows: []
+            )
+        case 1:
+            return AccountObservation(
+                availability: typical.availability,
+                failure: typical.failure,
+                planType: typical.planType,
+                windows: [typical.windows[0]]
+            )
+        default:
+            return typical
+        }
+    }
+
     static func typicalAccount() -> AccountObservation {
         AccountObservation(
             availability: .fresh,

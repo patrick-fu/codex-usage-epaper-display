@@ -52,6 +52,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
     private var bindCandidates: [BindCandidate] = []
     private var lastBLEClassification: BLEClassification?
     private var bluetoothBecameUnavailable = false
+    private var compositionSession = DisplayCompositionSession()
 
     var persistenceRoot: URL {
         store.root
@@ -221,12 +222,12 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             guard isPersistenceWritable else { return }
             var candidate = productState
             candidate.preferences.displayStyle = style
-            persistCandidate(candidate)
+            persistCandidate(candidate, enqueueConfiguration: true)
         case .savePreferences(let preferences):
             guard isPersistenceWritable else { return }
             var candidate = productState
             candidate.preferences = preferences
-            persistCandidate(candidate)
+            persistCandidate(candidate, enqueueConfiguration: true)
         case .resetUsageInkData:
             link.unbind()
             do {
@@ -329,7 +330,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         }
     }
 
-    private func persistCandidate(_ candidate: ProductState) {
+    private func persistCandidate(_ candidate: ProductState, enqueueConfiguration: Bool = false) {
         do {
             try store.save(candidate)
             productState = candidate
@@ -338,6 +339,13 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             storageClassification = nil
             isPersistenceWritable = true
             panelTrust = .invalid
+            if enqueueConfiguration {
+                DisplayCompositionCoordinator.applyConfiguration(
+                    session: &compositionSession,
+                    preferences: productState.preferences,
+                    fallbackInput: fallbackCompositionInput(preferences: productState.preferences)
+                )
+            }
         } catch PersistenceError.readOnlyUnsupportedSchema {
             applyLoad(store.load())
             isPersistenceWritable = false
@@ -387,4 +395,60 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             lastBLEClassification: lastBLEClassification
         )
     }
+
+    var inFlightFrame: DisplayFrame? {
+        queue.sync { compositionSession.inFlightFrame }
+    }
+
+    var pendingAutomaticInput: DisplayFrameInput? {
+        queue.sync { compositionSession.pendingAutomatic }
+    }
+
+    func beginInFlightComposition(_ input: DisplayFrameInput) throws -> DisplayFrame {
+        var frame: DisplayFrame?
+        var caught: Error?
+        queue.sync {
+            do {
+                frame = try DisplayCompositionCoordinator.beginInFlight(
+                    session: &compositionSession,
+                    input: input
+                )
+            } catch {
+                caught = error
+            }
+        }
+        if let caught {
+            throw caught
+        }
+        return try unwrapFrame(frame)
+    }
+
+    func finishInFlightComposition() -> DisplayFrameInput? {
+        queue.sync {
+            DisplayCompositionCoordinator.finishInFlight(session: &compositionSession)
+        }
+    }
+
+    private func unwrapFrame(_ frame: DisplayFrame?) throws -> DisplayFrame {
+        guard let frame else {
+            throw DisplayCompositionMissingFrame()
+        }
+        return frame
+    }
+
+    private func fallbackCompositionInput(preferences: DisplayPreferences) -> DisplayFrameInput {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        return DisplayFrameInput(
+            preferences: preferences,
+            account: .unknown,
+            localActivity: .unknown,
+            composedAt: Date(),
+            calendar: calendar,
+            timeZone: .current,
+            preferredLanguages: Locale.preferredLanguages
+        )
+    }
 }
+
+struct DisplayCompositionMissingFrame: Error {}
