@@ -441,7 +441,7 @@ final class DisplayRefreshTransportTests: XCTestCase {
         harness.clock.advance(30)
         XCTAssertEqual(harness.failed, .planeTimeout)
         XCTAssertFalse(harness.completed)
-        XCTAssertEqual(harness.link, .ready)
+        XCTAssertNotEqual(harness.link, .ready)
     }
 
     func testHostSleepCancelsObservationAndDropsReadySession() {

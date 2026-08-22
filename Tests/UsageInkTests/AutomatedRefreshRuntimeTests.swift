@@ -97,7 +97,7 @@ final class AutomatedRefreshRuntimeTests: XCTestCase {
         harness.runtime.submit(.hostWillSleep)
         settle()
         harness.runtime.submit(.hostDidWake)
-        harness.clock.advance(2)
+        advanceScheduledRecovery(harness)
         waitUntil { self.refreshWrites(harness.radio).count == 3 }
         XCTAssertEqual(harness.box.snapshot?.panelTrust, .invalid)
         harness.clock.advance(15)
@@ -322,7 +322,7 @@ final class AutomatedRefreshRuntimeTests: XCTestCase {
         harness.runtime.submit(.hostWillSleep)
         settle()
         harness.runtime.submit(.hostDidWake)
-        harness.clock.advance(2)
+        advanceScheduledRecovery(harness)
         waitUntil { harness.linkCalls.recoverCount == 2 }
         XCTAssertEqual(harness.linkCalls.recoverCount, 2)
         XCTAssertEqual(controller.maximumConcurrent, 1)
@@ -370,11 +370,23 @@ final class AutomatedRefreshRuntimeTests: XCTestCase {
 
     private func startAndAssumePanel(_ harness: AutomatedRefreshHarness) {
         harness.runtime.start()
+        waitUntil { harness.box.snapshot != nil }
+        advanceScheduledRecovery(harness)
         waitUntil { harness.box.snapshot?.binding == .bound }
-        harness.clock.advance(2)
         waitUntil { self.refreshWrites(harness.radio).count == 1 }
         harness.clock.advance(15)
-        waitUntil { harness.box.snapshot?.panelTrust == .assumed }
+        waitUntil { harness.box.snapshot?.panelTrust == .assumed && harness.box.snapshot?.bleLink == .ready }
+    }
+
+    private func advanceScheduledRecovery(_ harness: AutomatedRefreshHarness) {
+        waitUntil {
+            harness.clock.scheduledDelay(id: "recovery") != nil
+                || harness.box.snapshot?.bleLink == .ready
+                || self.refreshWrites(harness.radio).count >= 1
+        }
+        if let delay = harness.clock.scheduledDelay(id: "recovery") {
+            harness.clock.advance(delay)
+        }
     }
 
     private func refreshWrites(_ radio: FakeRadio) -> [BLEWriteRecord] {
@@ -416,7 +428,7 @@ final class AutomatedRefreshRuntimeTests: XCTestCase {
     }
 
     private func waitUntil(_ file: StaticString = #filePath, line: UInt = #line, _ predicate: @escaping () -> Bool) {
-        let deadline = Date().addingTimeInterval(2.0)
+        let deadline = Date().addingTimeInterval(3.0)
         while Date() < deadline {
             if predicate() { return }
             RunLoop.current.run(until: Date().addingTimeInterval(0.01))
@@ -525,11 +537,11 @@ private final class LinkCallCounter: DisplayLinkControlling, DisplayLinkDelegate
         inner.bind(identifier: identifier)
     }
 
-    func recover(identifier: UUID) {
+    func recover(identifier: UUID, resetBudget: Bool) {
         lock.lock()
         recoveries += 1
         lock.unlock()
-        inner.recover(identifier: identifier)
+        inner.recover(identifier: identifier, resetBudget: resetBudget)
     }
 
     func unbind() {

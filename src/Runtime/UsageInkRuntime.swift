@@ -82,6 +82,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
     private var sleeping = false
     private var joinedScheduledPoll = false
     private var pendingDurableSave = false
+    private var recoveryBudgetActive = false
 
     private static let pollTimerID = "runtime.poll"
     private static let freshnessTimerID = "runtime.freshness"
@@ -170,12 +171,17 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         switch availability {
         case .unauthorized, .unavailable:
             bluetoothBecameUnavailable = true
+            recoveryBudgetActive = false
             clearReadySession()
             panelTrust = .invalid
         case .poweredOn:
-            if (bluetoothBecameUnavailable || hasRefreshRequest), let identifier = persistedBindingIdentifier {
-                bluetoothBecameUnavailable = false
-                link.recover(identifier: identifier)
+            let recoveredFromUnavailable = bluetoothBecameUnavailable
+            if recoveredFromUnavailable, persistedBindingIdentifier != nil {
+                automaticRefreshPending = true
+            }
+            bluetoothBecameUnavailable = false
+            if persistedBindingIdentifier != nil, hasRefreshRequest {
+                ensureRecovery(resetBudget: recoveredFromUnavailable)
             }
         case .unknown:
             break
@@ -187,9 +193,14 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         dispatchPrecondition(condition: .onQueue(queue))
         bleLink = state
         switch state {
-        case .disconnected, .unbound, .unavailable, .unreachable:
+        case .disconnected, .unbound, .unavailable:
             clearReadySession()
-        case .ready, .scanning, .connecting, .discovering, .subscribing, .awaitingConfig, .initializing:
+        case .unreachable:
+            clearReadySession()
+            recoveryBudgetActive = false
+        case .ready:
+            recoveryBudgetActive = false
+        case .scanning, .connecting, .discovering, .subscribing, .awaitingConfig, .initializing:
             break
         }
         if state == .ready {
@@ -240,6 +251,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             lastBLEClassification = nil
             bindCandidates = []
             panelTrust = .invalid
+            recoveryBudgetActive = false
             link.confirmBoundIdentity(session.identifier)
             // A first usable binding owns an initial full frame, even with degraded data.
             automaticRefreshPending = true
@@ -343,7 +355,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         panelTrust = .invalid
         if persistedBindingIdentifier != nil {
             automaticRefreshPending = true
-            if !sleeping {
+            if !sleeping, !recoveryBudgetActive {
                 ensureRecovery()
             }
         }
@@ -411,6 +423,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         lastBLEClassification = nil
         bindCandidates = []
         panelTrust = .invalid
+        recoveryBudgetActive = false
     }
 
     private func rejectReadySession() {
@@ -420,6 +433,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         clearReadySession()
         panelTrust = .invalid
         bluetoothBecameUnavailable = false
+        recoveryBudgetActive = false
         link.confirmBoundIdentity(nil)
     }
 
@@ -629,6 +643,9 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             return
         }
         manualRefreshPending = true
+        if persistedBindingIdentifier != nil, bleLink != .ready {
+            ensureRecovery(resetBudget: true)
+        }
         if pollRunning {
             return
         }
@@ -711,7 +728,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             sessionGeneration: session.generation
         )
         if !transferActive, persistedBindingIdentifier != nil {
-            ensureRecovery()
+            ensureRecovery(resetBudget: false)
         }
     }
 
@@ -845,6 +862,9 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
                 }
                 self.pollAttempted = false
                 self.pollTerminal = false
+                if self.persistedBindingIdentifier != nil, self.bleLink != .ready {
+                    self.ensureRecovery(resetBudget: true)
+                }
                 if self.pollRunning {
                     self.joinedScheduledPoll = true
                 } else {
@@ -920,19 +940,27 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         scheduleFreshnessCheck()
     }
 
-    private func ensureRecovery() {
+    private func ensureRecovery(resetBudget: Bool = false) {
         guard !sleeping,
               hasRefreshRequest,
-              let identifier = persistedBindingIdentifier,
-              bleLink != .ready,
-              bleLink != .scanning,
-              bleLink != .connecting,
-              bleLink != .discovering,
-              bleLink != .subscribing,
-              bleLink != .awaitingConfig,
-              bleLink != .initializing
+              let identifier = persistedBindingIdentifier
         else { return }
-        link.recover(identifier: identifier)
+        switch bleLink {
+        case .ready:
+            return
+        case .scanning, .connecting, .discovering, .subscribing, .awaitingConfig, .initializing:
+            return
+        case .unreachable, .unavailable:
+            if !resetBudget {
+                return
+            }
+        case .disconnected, .unbound:
+            if recoveryBudgetActive {
+                return
+            }
+        }
+        recoveryBudgetActive = true
+        link.recover(identifier: identifier, resetBudget: resetBudget)
     }
 
     private func applyAccountSuccess(_ snapshot: CodexUsageSnapshot) {
@@ -1134,6 +1162,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         transferActive = false
         panelTrust = .invalid
         clearReadySession()
+        recoveryBudgetActive = false
         link.noteHostWillSleep()
     }
 
@@ -1151,7 +1180,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             schedulePollTimer()
             scheduleFreshnessCheck()
         }
-        ensureRecovery()
+        ensureRecovery(resetBudget: true)
         processRefreshRequest()
     }
 

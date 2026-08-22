@@ -100,7 +100,10 @@ struct StatusSummaryFormatter: Sendable, Equatable {
                 parts.append(displayUnavailableText)
             }
             if let classification {
-                parts.append(classification.menuText(language: language))
+                let classified = classification.menuText(language: language)
+                if classified != bleLink.menuText(language: language) {
+                    parts.append(classified)
+                }
             }
         }
         return parts.joined(separator: " · ")

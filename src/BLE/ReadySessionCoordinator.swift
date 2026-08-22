@@ -48,6 +48,16 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
     private var nextWriteOperationID: UInt64 = 0
     private var inFlightWrites: [InFlightWrite] = []
     private var transfer: TransferSession?
+    private var inFlightIsRefresh = false
+    private var recoveryActive = false
+    private var recoveryExhausted = false
+    private var recoveryAttemptsUsed = 0
+    private var handlingFailure = false
+    private var pendingRecovery: (identifier: UUID, resetBudget: Bool)?
+
+    static let recoveryAttemptLimit = 5
+    static let recoveryInitialDelay: TimeInterval = 2
+    static let recoveryRetryDelays: [TimeInterval] = [5, 15, 45, 90]
 
     init(radio: RadioTransport, clock: DisplayClock) {
         self.radio = radio
@@ -93,18 +103,30 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         startConnect(identifier: identifier)
     }
 
-    func recover(identifier: UUID) {
-        guard availability == .poweredOn else {
-            return
-        }
+    func recover(identifier: UUID, resetBudget: Bool = false) {
         guard confirmedIdentity == identifier else {
             return
         }
-        startConnect(identifier: identifier)
+        guard availability == .poweredOn else {
+            pendingRecovery = (identifier, resetBudget)
+            return
+        }
+        pendingRecovery = nil
+        if link == .ready {
+            return
+        }
+        if recoveryActive {
+            return
+        }
+        if recoveryExhausted, !resetBudget {
+            return
+        }
+        startRecoveryBudget(identifier: identifier)
     }
 
     func unbind() {
         confirmedIdentity = nil
+        abortRecoveryBudget()
         cancelWork()
         emitLink(.unbound)
     }
@@ -148,6 +170,7 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
     }
 
     func noteHostWillSleep() {
+        abortRecoveryBudget()
         failLiveSession(classification: .disconnected, linkState: idleLink())
     }
 
@@ -174,12 +197,21 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         case .unknown:
             break
         case .unauthorized:
+            abortRecoveryBudget()
             failLiveSession(classification: .bluetoothUnauthorized, linkState: .unavailable)
         case .unavailable:
+            abortRecoveryBudget()
             failLiveSession(classification: .bluetoothUnavailable, linkState: .unavailable)
         case .poweredOn:
-            if link == .unavailable || previous != .poweredOn {
+            if recoveryActive {
+                if link == .unavailable {
+                    emitLink(.disconnected)
+                }
+            } else if link == .unavailable || previous != .poweredOn {
                 emitLink(idleLink())
+            }
+            if let pending = pendingRecovery, confirmedIdentity == pending.identifier {
+                recover(identifier: pending.identifier, resetBudget: pending.resetBudget)
             }
         }
         delegate?.displayLinkDidChangeAvailability(availability)
@@ -193,6 +225,11 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
             rssi: rssi
         )
         emitCandidates()
+        if recoveryActive, link == .scanning, identifier == confirmedIdentity {
+            clock.cancel(id: "scan")
+            radio.stopScan()
+            startConnect(identifier: identifier)
+        }
     }
 
     func radioDidConnect(identifier: UUID) {
@@ -212,15 +249,14 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
     }
 
     func radioDidDisconnect(identifier: UUID) {
+        guard !handlingFailure else {
+            return
+        }
         guard activeIdentifier == identifier || confirmedIdentity == identifier else {
             return
         }
         if link == .ready || activeIdentifier == identifier {
-            failTransfer(.disconnected)
-            resetSession()
-            classify(.disconnected)
-            emitLink(idleLink())
-            delegate?.displayLinkDidDisconnect()
+            fail(.disconnected)
         }
     }
 
@@ -458,6 +494,9 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         }
         initGateOpen = false
         sessionGeneration += 1
+        recoveryActive = false
+        recoveryExhausted = false
+        recoveryAttemptsUsed = 0
         emitLink(.ready)
         delegate?.displayLinkDidBecomeReady(
             ReadyBLESession(
@@ -474,6 +513,18 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
 
     private func handleScanTimeout() {
         radio.stopScan()
+        guard link == .scanning else {
+            return
+        }
+        if recoveryActive {
+            fail(.boundDisplayNotFound)
+            return
+        }
+        if confirmedIdentity != nil {
+            classify(.boundDisplayNotFound)
+            emitLink(.disconnected)
+            return
+        }
         if candidates.isEmpty {
             classify(.boundDisplayNotFound)
         }
@@ -481,22 +532,41 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
     }
 
     private func fail(_ classification: BLEClassification) {
-        failTransfer(classification)
+        if handlingFailure {
+            return
+        }
+        handlingFailure = true
+        let continueRecovery = recoveryActive && !recoveryExhausted
         let identifier = activeIdentifier
         cancelTimers()
         radio.stopScan()
         if let identifier {
             radio.cancelConnection(identifier: identifier)
         }
-        resetSession()
         classify(classification)
+        if continueRecovery {
+            emitLink(.disconnected)
+            failTransfer(classification)
+            resetSession()
+            delegate?.displayLinkDidDisconnect()
+            scheduleNextRecoveryAttemptOrExhaust()
+            handlingFailure = false
+            return
+        }
         emitLink(idleLink())
-        if classification == .disconnected || classification == .bluetoothUnavailable || classification == .bluetoothUnauthorized {
+        failTransfer(classification)
+        resetSession()
+        if identifier != nil
+            || classification == .disconnected
+            || classification == .bluetoothUnavailable
+            || classification == .bluetoothUnauthorized {
             delegate?.displayLinkDidDisconnect()
         }
+        handlingFailure = false
     }
 
     private func failLiveSession(classification: BLEClassification, linkState: BLELinkState) {
+        handlingFailure = true
         failTransfer(classification)
         cancelTimers()
         radio.stopScan()
@@ -509,6 +579,68 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         classify(classification)
         emitLink(linkState)
         delegate?.displayLinkDidDisconnect()
+        handlingFailure = false
+    }
+
+    private func abortRecoveryBudget() {
+        recoveryActive = false
+        recoveryExhausted = false
+        recoveryAttemptsUsed = 0
+        pendingRecovery = nil
+        clock.cancel(id: "recovery")
+    }
+
+    private func startRecoveryBudget(identifier: UUID) {
+        handlingFailure = true
+        cancelTimers()
+        radio.stopScan()
+        if let activeIdentifier {
+            radio.cancelConnection(identifier: activeIdentifier)
+        }
+        resetSession()
+        handlingFailure = false
+        recoveryAttemptsUsed = 0
+        recoveryExhausted = false
+        recoveryActive = true
+        emitLink(.disconnected)
+        clock.schedule(id: "recovery", after: Self.recoveryInitialDelay) { [weak self] in
+            self?.beginRecoveryAttempt()
+        }
+        _ = identifier
+    }
+
+    private func beginRecoveryAttempt() {
+        guard recoveryActive, !recoveryExhausted, let identifier = confirmedIdentity else {
+            return
+        }
+        guard availability == .poweredOn else {
+            fail(.bluetoothUnavailable)
+            return
+        }
+        cancelTimers()
+        radio.stopScan()
+        resetSession()
+        activeIdentifier = identifier
+        emitLink(.scanning)
+        radio.scan(service: DisplayLinkUUIDs.service)
+        clock.schedule(id: "scan", after: 15) { [weak self] in
+            self?.handleScanTimeout()
+        }
+    }
+
+    private func scheduleNextRecoveryAttemptOrExhaust() {
+        recoveryAttemptsUsed += 1
+        if recoveryAttemptsUsed >= Self.recoveryAttemptLimit {
+            recoveryActive = false
+            recoveryExhausted = true
+            classify(.retryExhausted)
+            emitLink(.unreachable)
+            return
+        }
+        let delay = Self.recoveryRetryDelays[recoveryAttemptsUsed - 1]
+        clock.schedule(id: "recovery", after: delay) { [weak self] in
+            self?.beginRecoveryAttempt()
+        }
     }
 
     private func idleLink() -> BLELinkState {
@@ -529,6 +661,7 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         firmwareMTU = 0
         transfer = nil
         inFlightWrites.removeAll()
+        inFlightIsRefresh = false
     }
 
     private func pumpTransfer() {
@@ -546,6 +679,7 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
             work.index += 1
             transfer = work
             if chunk.withResponse {
+                inFlightIsRefresh = chunk.isRefresh
                 issueWrite(
                     identifier: identifier,
                     data: chunk.packet,
@@ -571,24 +705,20 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
     }
 
     private func handlePlaneTimeout() {
-        var isRefresh = false
-        if let work = transfer, work.index < work.chunks.count {
-            isRefresh = work.chunks[work.index].isRefresh
-        }
-        handleStillConnectedTransportFailure(isRefresh: isRefresh)
+        handleStillConnectedTransportFailure(isRefresh: inFlightIsRefresh)
     }
 
     private func handleStillConnectedTransportFailure(isRefresh: Bool) {
         guard transfer != nil else {
             return
         }
-        if beginSameSessionRetry() {
+        if beginSameSessionRetry(isRefresh: isRefresh) {
             return
         }
-        failTransfer(isRefresh ? .refreshTimeout : .planeTimeout)
+        fail(isRefresh ? .refreshTimeout : .planeTimeout)
     }
 
-    private func beginSameSessionRetry() -> Bool {
+    private func beginSameSessionRetry(isRefresh: Bool) -> Bool {
         guard var work = transfer, !work.retryUsed, !work.observing, let identifier = activeIdentifier else {
             return false
         }
@@ -608,7 +738,7 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
         initGeneration += 1
         initGateOpen = true
         emitLink(.initializing)
-        classify(.planeTimeout)
+        classify(isRefresh ? .refreshTimeout : .planeTimeout)
         clock.schedule(id: "init", after: 5) { [weak self] in
             self?.fail(.initTimeout)
         }
@@ -770,12 +900,16 @@ final class ReadySessionCoordinator: DisplayLinkControlling, RadioTransportDeleg
     }
 
     private func cancelTimers() {
-        for id in ["scan", "connect", "config", "init", "plane", "observation"] {
+        for id in ["recovery", "scan", "connect", "config", "init", "plane", "observation"] {
             clock.cancel(id: id)
         }
     }
 
     private func emitLink(_ state: BLELinkState) {
+        var state = state
+        if confirmedIdentity != nil, state == .unbound {
+            state = .disconnected
+        }
         link = state
         delegate?.displayLinkDidUpdateLink(state)
     }

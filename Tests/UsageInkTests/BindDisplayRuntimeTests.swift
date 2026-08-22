@@ -158,6 +158,7 @@ final class BindDisplayRuntimeTests: XCTestCase {
 
         let recovered = waitFor(harness, "recovered") { $0.bleLink == .ready && $0.hasReadyWakeupConfiguration }
         harness.radio.setAvailability(.poweredOn)
+        advanceScheduledRecovery(harness)
         wait(for: [recovered], timeout: 1.0)
         XCTAssertEqual(harness.box.snapshot?.binding, .bound)
         XCTAssertTrue(harness.box.snapshot?.hasReadyWakeupConfiguration ?? false)
@@ -245,6 +246,19 @@ final class BindDisplayRuntimeTests: XCTestCase {
         let started = waitFor(harness, "start") { _ in true }
         harness.runtime.start()
         wait(for: [started], timeout: 1.0)
+    }
+
+    private func advanceScheduledRecovery(_ harness: RuntimeHarness) {
+        let deadline = Date().addingTimeInterval(2.0)
+        while Date() < deadline {
+            if harness.clock.scheduledDelay(id: "recovery") != nil || harness.box.snapshot?.bleLink == .ready {
+                break
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        if let delay = harness.clock.scheduledDelay(id: "recovery") {
+            harness.clock.advance(delay)
+        }
     }
 
     private func waitForScan(_ harness: RuntimeHarness) {

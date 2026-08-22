@@ -98,6 +98,9 @@ final class FakeRadio: RadioTransport {
     var peripherals: [UUID: FakePeripheralSpec] = [:]
     private(set) var writes: [BLEWriteRecord] = []
     private(set) var scanActive = false
+    private(set) var scanCount = 0
+    private(set) var connectCount = 0
+    var advertiseOnScan = true
     var holdWriteAcknowledgements = false
     var maximumWriteWithoutResponse = 512
     var maximumWriteWithResponse = 512
@@ -111,7 +114,12 @@ final class FakeRadio: RadioTransport {
     }
 
     func scan(service: UUID) {
+        _ = service
         scanActive = true
+        scanCount += 1
+        guard advertiseOnScan else {
+            return
+        }
         for (identifier, spec) in peripherals {
             emitDiscover(identifier: identifier, spec: spec)
         }
@@ -122,6 +130,7 @@ final class FakeRadio: RadioTransport {
     }
 
     func connect(identifier: UUID) {
+        connectCount += 1
         guard let spec = peripherals[identifier], spec.connectSucceeds else {
             emit { self.delegate?.radioDidFailToConnect(identifier: identifier) }
             return

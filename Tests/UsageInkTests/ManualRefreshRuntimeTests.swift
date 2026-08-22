@@ -134,15 +134,24 @@ final class ManualRefreshRuntimeTests: XCTestCase {
         let failed = waitFor(harness, "failed") { $0.panelTrust == .invalid && $0.lastBLEClassification == .planeTimeout }
         harness.clock.advance(30)
         wait(for: [failed], timeout: 1.0)
-        XCTAssertEqual(harness.box.snapshot?.bleLink, .ready)
-        XCTAssertTrue(harness.box.snapshot?.hasReadyWakeupConfiguration ?? false)
+        XCTAssertNotEqual(harness.box.snapshot?.bleLink, .ready)
+        XCTAssertFalse(harness.box.snapshot?.hasReadyWakeupConfiguration ?? true)
         XCTAssertEqual(loadedState(harness).refreshRecord.lastSucceededFingerprint, record.lastSucceededFingerprint)
 
         harness.radio.dropDeferredWriteAcknowledgements()
         harness.radio.holdWriteAcknowledgements = false
+        harness.radio.peripherals[desk]?.autoMTUText = "mtu=185"
         harness.runtime.submit(.refreshNow)
+        let recoveryDeadline = Date().addingTimeInterval(2.0)
+        while Date() < recoveryDeadline, harness.clock.scheduledDelay(id: "recovery") == nil, harness.box.snapshot?.bleLink != .ready {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        if let delay = harness.clock.scheduledDelay(id: "recovery") {
+            harness.clock.advance(delay)
+        }
         waitUntilWritesIncludeRefresh(harness)
         XCTAssertTrue(harness.radio.writes.contains { $0.opcode == DisplayLinkUUIDs.refreshOpcode })
+        XCTAssertEqual(loadedState(harness).refreshRecord.lastSucceededFingerprint, record.lastSucceededFingerprint)
     }
 
     func testHostSleepInvalidatesTrustAndCancelsObservation() throws {

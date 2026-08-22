@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C21A00000000000000000002 /* DisconnectSleepRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C21A00000000000000000001 /* DisconnectSleepRecoveryTests.swift */; };
 		C20A00000000000000000002 /* AutomatedRefreshRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20A00000000000000000001 /* AutomatedRefreshRuntimeTests.swift */; };
 		00F1A2EE774DFBFB3CC672B6 /* ActivityDiscoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDDF73ADD522FC5DA009BBC8 /* ActivityDiscoveryTests.swift */; };
 		01EB0888CCAA4EE0A5D4467F /* PlaneEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA852DBADF0DE4CBE8A55CA9 /* PlaneEncoder.swift */; };
@@ -118,6 +119,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		C21A00000000000000000001 /* DisconnectSleepRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisconnectSleepRecoveryTests.swift; sourceTree = "<group>"; };
 		C20A00000000000000000001 /* AutomatedRefreshRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomatedRefreshRuntimeTests.swift; sourceTree = "<group>"; };
 		04B7A4A6829A03C26D9133A8 /* TokenCountParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TokenCountParser.swift; sourceTree = "<group>"; };
 		0DC9DE31E8CEBDACFC0E4F4C /* ShellLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellLaunchTests.swift; sourceTree = "<group>"; };
@@ -259,6 +261,7 @@
 		4CBC83B3DCC30296E9AA46DB /* UsageInkTests */ = {
 			isa = PBXGroup;
 			children = (
+				C21A00000000000000000001 /* DisconnectSleepRecoveryTests.swift */,
 				C20A00000000000000000001 /* AutomatedRefreshRuntimeTests.swift */,
 				BDDF73ADD522FC5DA009BBC8 /* ActivityDiscoveryTests.swift */,
 				E6FF771439EF184173675380 /* ActivityFixtures.swift */,
@@ -547,6 +550,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C21A00000000000000000002 /* DisconnectSleepRecoveryTests.swift in Sources */,
 				C20A00000000000000000002 /* AutomatedRefreshRuntimeTests.swift in Sources */,
 				00F1A2EE774DFBFB3CC672B6 /* ActivityDiscoveryTests.swift in Sources */,
 				F15C3FF9D77844FD0A499A36 /* ActivityFixtures.swift in Sources */,

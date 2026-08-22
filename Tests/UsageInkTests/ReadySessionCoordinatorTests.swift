@@ -179,6 +179,8 @@ final class ReadySessionCoordinatorTests: XCTestCase {
         harness.radio.peripherals[desk] = spec
         harness.session = nil
         harness.coordinator.recover(identifier: desk)
+        XCTAssertNotEqual(harness.link, .ready)
+        harness.clock.advance(2)
         XCTAssertEqual(harness.link, .ready)
         XCTAssertEqual(harness.session?.mtu, 185)
         XCTAssertEqual(harness.session?.rleEnabled, false)
@@ -233,6 +235,9 @@ final class ReadySessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(harness.link, .disconnected)
         XCTAssertTrue(harness.radio.writes.isEmpty)
         harness.coordinator.recover(identifier: desk)
+        XCTAssertNotEqual(harness.link, .ready)
+        XCTAssertEqual(harness.clock.scheduledDelay(id: "recovery"), 2)
+        harness.clock.advance(2)
         XCTAssertEqual(harness.link, .ready)
         XCTAssertEqual(harness.radio.writes.count, 1)
     }

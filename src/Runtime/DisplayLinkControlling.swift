@@ -30,7 +30,7 @@ protocol DisplayLinkControlling: AnyObject {
     func confirmBoundIdentity(_ identifier: UUID?)
     func startBindScan()
     func bind(identifier: UUID)
-    func recover(identifier: UUID)
+    func recover(identifier: UUID, resetBudget: Bool)
     func unbind()
     func cancelWork()
     func writeWakeupPin(_ pin: UInt8, sessionGeneration: UInt64, configDigest: Data) -> Bool
@@ -45,7 +45,7 @@ final class NullDisplayLink: DisplayLinkControlling {
     func confirmBoundIdentity(_ identifier: UUID?) {}
     func startBindScan() {}
     func bind(identifier: UUID) {}
-    func recover(identifier: UUID) {}
+    func recover(identifier: UUID, resetBudget: Bool) {}
     func unbind() {}
     func cancelWork() {}
     func writeWakeupPin(_ pin: UInt8, sessionGeneration: UInt64, configDigest: Data) -> Bool {
