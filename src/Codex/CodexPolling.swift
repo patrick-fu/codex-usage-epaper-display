@@ -6,6 +6,7 @@ struct CodexPollingDependencies {
     var now: () -> Date
     var resolve: (String?) -> Result<CodexResolvedBinary, CodexFailure>
     var poll: (String, String, @escaping (Result<CodexUsageSnapshot, CodexFailure>) -> Void) -> Void
+    var cancel: () -> Void = {}
     var probeQueue: DispatchQueue = DispatchQueue(label: "com.patrickfu.UsageInk.codex.probe", qos: .utility)
 
     static func disabled(now: @escaping () -> Date = Date.init) -> CodexPollingDependencies {
@@ -38,6 +39,9 @@ struct CodexPollingDependencies {
             resolve: { discovery.resolve(explicitPath: $0) },
             poll: { executable, appVersion, completion in
                 client.poll(executable: executable, appVersion: appVersion, completion: completion)
+            },
+            cancel: {
+                client.cancel()
             }
         )
     }

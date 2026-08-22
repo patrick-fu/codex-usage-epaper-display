@@ -3,6 +3,7 @@ import Foundation
 enum RuntimeCommand: Sendable, Equatable {
     case refreshNow
     case hostWillSleep
+    case hostDidWake
     case findAndBindDisplay
     case bindDisplay(UUID)
     case unbindDisplay
@@ -42,6 +43,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
     private let activityStore: ActivityStore
     private let codexHome: URL
     private let now: @Sendable () -> Date
+    private let clock: DisplayClock
     private let timeZone: TimeZone
     private let link: DisplayLinkControlling
     private var productState: ProductState = .default
@@ -68,8 +70,23 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
     private var accountObservation: AccountObservation = .unknown
     private var pollRunning = false
     private var manualRefreshPending = false
+    private var automaticRefreshPending = false
     private var transferActive = false
+    private var inFlightManualRequest = false
     private var queuedManualAfterTransfer = false
+    private var queuedAutomaticAfterTransfer = false
+    private var pollAttempted = false
+    private var pollTerminal = false
+    private var pollGeneration: UInt64 = 0
+    private var pollDeadline: Date?
+    private var sleeping = false
+    private var joinedScheduledPoll = false
+    private var pendingDurableSave = false
+
+    private static let pollTimerID = "runtime.poll"
+    private static let freshnessTimerID = "runtime.freshness"
+    private static let durableSaveTimerID = "runtime.durableSave"
+    private static let freshnessPersistRetry: TimeInterval = 5
 
     init(
         language: ResolvedInterfaceLanguage = .resolveSystem(),
@@ -77,6 +94,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         activityStore: ActivityStore? = nil,
         codexHome: URL? = nil,
         now: @escaping @Sendable () -> Date = { Date() },
+        clock: DisplayClock? = nil,
         timeZone: TimeZone = .current,
         makeLink: ((DispatchQueue) -> DisplayLinkControlling)? = nil,
         makeCodex: ((DispatchQueue) -> CodexPollingDependencies)? = nil,
@@ -91,6 +109,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         self.now = now
         self.timeZone = timeZone
         self.snapshotHandler = snapshotHandler
+        self.clock = clock ?? DispatchDisplayClock(queue: queue)
         self.link = makeLink?(queue) ?? NullDisplayLink()
         if let makeCodex {
             self.codex = makeCodex(queue)
@@ -110,11 +129,31 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             lastBLEClassification = nil
             bindCandidates = []
             bluetoothBecameUnavailable = false
-            refreshLocalActivity(forceScan: true)
+            refreshLocalActivity(forceScan: false)
+            if accountObservation.availability == .stale,
+               productState.account.availability != .stale {
+                var candidate = productState
+                candidate.account.availability = .stale
+                persistAccount(candidate)
+            }
             link.confirmBoundIdentity(persistedBindingIdentifier)
             link.attach()
+            scheduleFreshnessCheck()
+            if persistedBindingIdentifier != nil {
+                automaticRefreshPending = true
+                if needsPollForEnabledSources {
+                    startPoll()
+                } else {
+                    resetPollDeadline(from: now())
+                    ensureRecovery()
+                    processRefreshRequest()
+                }
+            } else if needsPollForEnabledSources {
+                startPoll()
+            } else {
+                resetPollDeadline(from: now())
+            }
             publish()
-            startAccountPoll()
         }
     }
 
@@ -134,7 +173,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             clearReadySession()
             panelTrust = .invalid
         case .poweredOn:
-            if bluetoothBecameUnavailable, let identifier = persistedBindingIdentifier {
+            if (bluetoothBecameUnavailable || hasRefreshRequest), let identifier = persistedBindingIdentifier {
                 bluetoothBecameUnavailable = false
                 link.recover(identifier: identifier)
             }
@@ -152,6 +191,9 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             clearReadySession()
         case .ready, .scanning, .connecting, .discovering, .subscribing, .awaitingConfig, .initializing:
             break
+        }
+        if state == .ready {
+            processRefreshRequest()
         }
         publish()
     }
@@ -177,6 +219,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
 
     func displayLinkDidBecomeReady(_ session: ReadyBLESession) {
         dispatchPrecondition(condition: .onQueue(queue))
+        let isFirstUsableBinding = persistedBindingIdentifier == nil
         let record = BoundDisplayRecord(
             identifier: session.identifier.uuidString,
             displayName: ProductState.sanitizedDisplayName(session.advertisedName)
@@ -198,7 +241,12 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             bindCandidates = []
             panelTrust = .invalid
             link.confirmBoundIdentity(session.identifier)
-            startTransferIfNeeded()
+            // A first usable binding owns an initial full frame, even with degraded data.
+            automaticRefreshPending = true
+            if isFirstUsableBinding, !pollRunning {
+                startPoll()
+            }
+            processRefreshRequest()
         } catch PersistenceError.readOnlyUnsupportedSchema {
             rejectReadySession()
             applyLoad(store.load())
@@ -237,7 +285,12 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
     func displayLinkDidCompleteRefresh() {
         dispatchPrecondition(condition: .onQueue(queue))
         transferActive = false
-        manualRefreshPending = false
+        if inFlightManualRequest {
+            manualRefreshPending = false
+        } else {
+            automaticRefreshPending = false
+        }
+        inFlightManualRequest = false
         panelTrust = .assumed
         if let fingerprint = compositionSession.inFlightFrame?.fingerprint {
             var candidate = productState
@@ -246,10 +299,14 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             candidate.refreshRecord.lastSuccessfulRefreshAt = Int(now().timeIntervalSince1970)
             persistRefreshSuccess(candidate)
         }
-        _ = DisplayCompositionCoordinator.finishInFlight(session: &compositionSession)
+        let laterAutomatic = DisplayCompositionCoordinator.finishInFlight(session: &compositionSession)
+        automaticRefreshPending = queuedAutomaticAfterTransfer || laterAutomatic != nil
+        queuedAutomaticAfterTransfer = false
         if queuedManualAfterTransfer {
             queuedManualAfterTransfer = false
-            requestManualRefresh()
+            requestManualRefresh(resetDeadline: false)
+        } else {
+            processRefreshRequest()
         }
         publish()
     }
@@ -257,13 +314,21 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
     func displayLinkDidFailRefresh(_ classification: BLEClassification) {
         dispatchPrecondition(condition: .onQueue(queue))
         transferActive = false
-        manualRefreshPending = false
+        let wasManual = inFlightManualRequest
+        if wasManual {
+            manualRefreshPending = false
+        }
+        inFlightManualRequest = false
         panelTrust = .invalid
         lastBLEClassification = classification
-        _ = DisplayCompositionCoordinator.finishInFlight(session: &compositionSession)
+        let laterAutomatic = DisplayCompositionCoordinator.finishInFlight(session: &compositionSession)
+        automaticRefreshPending = queuedAutomaticAfterTransfer || laterAutomatic != nil || !wasManual
+        queuedAutomaticAfterTransfer = false
         if queuedManualAfterTransfer {
             queuedManualAfterTransfer = false
-            requestManualRefresh()
+            requestManualRefresh(resetDeadline: false)
+        } else {
+            processRefreshRequest()
         }
         publish()
     }
@@ -276,6 +341,12 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             bleLink = .disconnected
         }
         panelTrust = .invalid
+        if persistedBindingIdentifier != nil {
+            automaticRefreshPending = true
+            if !sleeping {
+                ensureRecovery()
+            }
+        }
         publish()
     }
 
@@ -285,6 +356,8 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             requestManualRefresh()
         case .hostWillSleep:
             handleHostWillSleep()
+        case .hostDidWake:
+            handleHostDidWake()
         case .rebuildLocalMetrics:
             rebuildLocalMetrics()
         case .findAndBindDisplay:
@@ -440,6 +513,8 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
                     preferences: productState.preferences,
                     fallbackInput: fallbackCompositionInput(preferences: productState.preferences)
                 )
+                automaticRefreshPending = true
+                processRefreshRequest(allowAutomaticPoll: false)
             }
         } catch PersistenceError.readOnlyUnsupportedSchema {
             notePersistenceFailure(.readOnlyUnsupportedSchema)
@@ -544,35 +619,75 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         )
     }
 
-    private func requestManualRefresh() {
+    private func requestManualRefresh(resetDeadline: Bool = true) {
         dispatchPrecondition(condition: .onQueue(queue))
+        if resetDeadline {
+            resetPollDeadline(from: now())
+        }
         if transferActive {
             queuedManualAfterTransfer = true
-            startAccountPoll()
-            refreshLocalActivity(forceScan: true)
             return
         }
         manualRefreshPending = true
-        refreshLocalActivity(forceScan: true)
         if pollRunning {
             return
         }
-        startAccountPoll()
-        if !pollRunning {
-            composeAndMaybeTransfer()
-        }
+        pollAttempted = false
+        pollTerminal = false
+        startPoll(resetDeadline: false)
+        processRefreshRequest()
     }
 
-    private func composeAndMaybeTransfer() {
+    private var hasRefreshRequest: Bool {
+        manualRefreshPending || automaticRefreshPending
+    }
+
+    private var accountEnabled: Bool {
+        productState.preferences.modules.plan || productState.preferences.modules.quota
+    }
+
+    private var localEnabled: Bool {
+        let modules = productState.preferences.modules
+        return modules.today || modules.weekTokens || modules.cache || modules.tps
+    }
+
+    private var needsPollForEnabledSources: Bool {
+        (accountEnabled && accountObservation.availability != .fresh)
+            || (localEnabled && localActivity.availability != .fresh)
+    }
+
+    private func processRefreshRequest(allowAutomaticPoll: Bool = true) {
         dispatchPrecondition(condition: .onQueue(queue))
-        guard manualRefreshPending, !transferActive else {
+        guard hasRefreshRequest, !transferActive, !sleeping else {
+            return
+        }
+        if manualRefreshPending && !pollTerminal {
+            startPoll(resetDeadline: false)
+            return
+        }
+        if allowAutomaticPoll, needsPollForEnabledSources, !pollAttempted {
+            startPoll()
+            return
+        }
+        guard !pollRunning else {
+            return
+        }
+        guard persistedBindingIdentifier != nil else {
             return
         }
         do {
-            _ = try DisplayCompositionCoordinator.beginInFlight(
+            compositionSession.pendingAutomatic = nil
+            let frame = try DisplayCompositionCoordinator.beginInFlight(
                 session: &compositionSession,
                 input: fallbackCompositionInput(preferences: productState.preferences)
             )
+            if !manualRefreshPending,
+               panelTrust == .assumed,
+               productState.refreshRecord.lastSucceededFingerprint == frame.fingerprint {
+                _ = DisplayCompositionCoordinator.finishInFlight(session: &compositionSession)
+                automaticRefreshPending = false
+                return
+            }
             startTransferIfNeeded()
         } catch {
             return
@@ -581,7 +696,7 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
 
     private func startTransferIfNeeded() {
         dispatchPrecondition(condition: .onQueue(queue))
-        guard manualRefreshPending, !transferActive else {
+        guard hasRefreshRequest, !transferActive else {
             return
         }
         guard let frame = compositionSession.inFlightFrame,
@@ -589,11 +704,15 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
               let session = readySession else {
             return
         }
+        inFlightManualRequest = manualRefreshPending
         transferActive = link.transferDisplayFrame(
             blackPlane: frame.blackPlane,
             redPlane: frame.redPlane,
             sessionGeneration: session.generation
         )
+        if !transferActive, persistedBindingIdentifier != nil {
+            ensureRecovery()
+        }
     }
 
     private func persistRefreshSuccess(_ candidate: ProductState) {
@@ -609,40 +728,50 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         }
     }
 
-    private func startAccountPoll() {
+    private func startPoll(resetDeadline: Bool = true) {
         dispatchPrecondition(condition: .onQueue(queue))
-        guard codex.isEnabled else {
+        guard !sleeping else {
             return
         }
         if pollRunning {
             return
         }
+        let start = now()
+        if resetDeadline {
+            resetPollDeadline(from: start)
+        }
+        pollAttempted = true
+        pollTerminal = false
         pollRunning = true
+        let generation = pollGeneration
+        refreshLocalActivity(forceScan: true)
+        guard codex.isEnabled else {
+            finishPoll(generation: generation)
+            return
+        }
         let explicitPath = productState.preferences.customCodexPath
         let appVersion = codex.appVersion
         codex.probeQueue.async { [self] in
             let resolved = self.codex.resolve(explicitPath)
             self.queue.async {
-                self.handleResolvedBinary(resolved, appVersion: appVersion)
+                self.handleResolvedBinary(resolved, appVersion: appVersion, generation: generation)
             }
         }
     }
 
     private func handleResolvedBinary(
         _ resolved: Result<CodexResolvedBinary, CodexFailure>,
-        appVersion: String
+        appVersion: String,
+        generation: UInt64
     ) {
         dispatchPrecondition(condition: .onQueue(queue))
-        guard pollRunning else {
+        guard pollRunning, generation == pollGeneration else {
             return
         }
         switch resolved {
         case .failure(let failure):
             applyAccountFailure(failure)
-            pollRunning = false
-            if manualRefreshPending && !transferActive {
-                composeAndMaybeTransfer()
-            }
+            finishPoll(generation: generation)
             publish()
         case .success(let binary):
             codex.poll(binary.path, appVersion) { [weak self] result in
@@ -650,24 +779,164 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
                     return
                 }
                 self.queue.async {
+                    guard generation == self.pollGeneration, self.pollRunning else {
+                        return
+                    }
                     switch result {
                     case .success(let snapshot):
                         self.applyAccountSuccess(snapshot)
                     case .failure(let failure):
                         self.applyAccountFailure(failure)
                     }
-                    self.pollRunning = false
-                    if self.manualRefreshPending && !self.transferActive {
-                        self.composeAndMaybeTransfer()
-                    }
+                    self.finishPoll(generation: generation)
                     self.publish()
                 }
             }
         }
     }
 
+    private func finishPoll(generation: UInt64) {
+        guard generation == pollGeneration else {
+            return
+        }
+        let missedScheduled = joinedScheduledPoll
+        joinedScheduledPoll = false
+        pollRunning = false
+        pollTerminal = true
+        scheduleFreshnessCheck()
+        if hasRefreshRequest {
+            if persistedBindingIdentifier != nil {
+                ensureRecovery()
+            }
+            processRefreshRequest()
+        }
+        guard !sleeping else {
+            return
+        }
+        if missedScheduled {
+            if let deadline = pollDeadline, deadline <= now() {
+                automaticRefreshPending = true
+                pollAttempted = false
+                pollTerminal = false
+                startPoll()
+                processRefreshRequest()
+            } else {
+                schedulePollTimer()
+            }
+        }
+    }
+
+    private func resetPollDeadline(from start: Date) {
+        pollDeadline = start.addingTimeInterval(15 * 60)
+        schedulePollTimer()
+    }
+
+    private func schedulePollTimer() {
+        guard !sleeping, let deadline = pollDeadline else {
+            return
+        }
+        clock.schedule(id: Self.pollTimerID, after: max(0, deadline.timeIntervalSince(now()))) { [weak self] in
+            self?.queue.async {
+                guard let self, !self.sleeping else { return }
+                if self.transferActive {
+                    self.queuedAutomaticAfterTransfer = true
+                } else {
+                    self.automaticRefreshPending = true
+                }
+                self.pollAttempted = false
+                self.pollTerminal = false
+                if self.pollRunning {
+                    self.joinedScheduledPoll = true
+                } else {
+                    self.startPoll()
+                }
+                self.processRefreshRequest()
+                self.publish()
+            }
+        }
+    }
+
+    private func scheduleFreshnessCheck() {
+        clock.cancel(id: Self.freshnessTimerID)
+        guard !sleeping else { return }
+        let timestamp = now()
+        var dates: [Date] = []
+        if accountEnabled,
+           productState.account.availability == .fresh,
+           let success = productState.account.lastSuccessfulObservationAt {
+            dates.append(Date(timeIntervalSince1970: TimeInterval(success + 20 * 60)))
+        }
+        if localEnabled,
+           productState.localActivity.availability == .fresh,
+           let success = productState.localActivity.lastSuccessfulObservationAt {
+            dates.append(Date(timeIntervalSince1970: TimeInterval(success + 20 * 60)))
+        }
+        guard let next = dates.min() else { return }
+        clock.schedule(id: Self.freshnessTimerID, after: max(0, next.timeIntervalSince(timestamp))) { [weak self] in
+            self?.queue.async {
+                guard let self, !self.sleeping else { return }
+                self.refreshFreshness()
+                self.publish()
+            }
+        }
+    }
+
+    private func refreshFreshness() {
+        let oldAccount = accountObservation.availability
+        let oldLocal = localActivity.availability
+        let accountAvailability = staleIfNeeded(
+            productState.account.availability,
+            lastSuccess: productState.account.lastSuccessfulObservationAt
+        )
+        if accountAvailability != productState.account.availability {
+            accountObservation.availability = accountAvailability
+            var candidate = productState
+            candidate.account.availability = accountAvailability
+            persistAccount(candidate)
+        }
+        refreshLocalActivity(forceScan: false)
+        if localActivity.availability == .stale,
+           productState.localActivity.availability != .stale {
+            persistLocalSourceRecord(
+                LocalActivitySourceRecord(
+                    lastSuccessfulObservationAt: productState.localActivity.lastSuccessfulObservationAt,
+                    availability: .stale,
+                    failure: productState.localActivity.failure
+                )
+            )
+        }
+        if oldAccount == .fresh && accountObservation.availability == .stale
+            || oldLocal == .fresh && localActivity.availability == .stale {
+            if transferActive {
+                queuedAutomaticAfterTransfer = true
+            } else {
+                automaticRefreshPending = true
+            }
+            pollAttempted = false
+            pollTerminal = false
+            startPoll()
+            processRefreshRequest()
+        }
+        scheduleFreshnessCheck()
+    }
+
+    private func ensureRecovery() {
+        guard !sleeping,
+              hasRefreshRequest,
+              let identifier = persistedBindingIdentifier,
+              bleLink != .ready,
+              bleLink != .scanning,
+              bleLink != .connecting,
+              bleLink != .discovering,
+              bleLink != .subscribing,
+              bleLink != .awaitingConfig,
+              bleLink != .initializing
+        else { return }
+        link.recover(identifier: identifier)
+    }
+
     private func applyAccountSuccess(_ snapshot: CodexUsageSnapshot) {
-        let observedAt = Int(codex.now().timeIntervalSince1970)
+        let observedAt = Int(now().timeIntervalSince1970)
         accountObservation = AccountObservation(
             availability: .fresh,
             failure: nil,
@@ -709,24 +978,63 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         persistAccount(candidate)
     }
 
-    private func persistAccount(_ candidate: ProductState) {
+    @discardableResult
+    private func persistAccount(_ candidate: ProductState) -> Bool {
+        persistState(candidate)
+    }
+
+    @discardableResult
+    private func persistState(_ candidate: ProductState) -> Bool {
+        productState = candidate
+        guard isPersistenceWritable else {
+            pendingDurableSave = false
+            clock.cancel(id: Self.durableSaveTimerID)
+            return false
+        }
         do {
             try store.save(candidate)
-            productState = candidate
+            pendingDurableSave = false
             storageClassification = nil
             isPersistenceWritable = true
+            clock.cancel(id: Self.durableSaveTimerID)
+            return true
         } catch PersistenceError.readOnlyUnsupportedSchema {
+            pendingDurableSave = false
+            clock.cancel(id: Self.durableSaveTimerID)
             notePersistenceFailure(.readOnlyUnsupportedSchema)
+            return false
         } catch {
+            pendingDurableSave = true
             notePersistenceFailure(.writeFailed)
+            scheduleDurableSaveRetry()
+            return false
         }
+    }
+
+    private func scheduleDurableSaveRetry() {
+        guard pendingDurableSave else {
+            return
+        }
+        clock.schedule(id: Self.durableSaveTimerID, after: Self.freshnessPersistRetry) { [weak self] in
+            self?.queue.async {
+                self?.retryDurableSave()
+            }
+        }
+    }
+
+    private func retryDurableSave() {
+        guard pendingDurableSave else {
+            return
+        }
+        persistState(productState)
+        publish()
     }
 
     private func staleIfNeeded(_ availability: PersistedAvailability, lastSuccess: Int?) -> PersistedAvailability {
         guard availability == .fresh, let lastSuccess else {
             return availability
         }
-        let age = codex.now().timeIntervalSince1970 - TimeInterval(lastSuccess)
+        let age = now().timeIntervalSince1970 - TimeInterval(lastSuccess)
         if age >= 20 * 60 {
             return .stale
         }
@@ -768,6 +1076,17 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             persistedFailure: productState.localActivity.failure
         )
         localActivity = rehydrated
+        if !forceScan,
+           rehydrated.availability == .stale,
+           productState.localActivity.availability != .stale {
+            persistLocalSourceRecord(
+                LocalActivitySourceRecord(
+                    lastSuccessfulObservationAt: productState.localActivity.lastSuccessfulObservationAt,
+                    availability: .stale,
+                    failure: productState.localActivity.failure
+                )
+            )
+        }
         if forceScan {
             localActivity = activityStore.ingest(
                 codexHome: codexHome,
@@ -792,28 +1111,48 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         )
     }
 
-    private func persistLocalSourceRecord(_ record: LocalActivitySourceRecord) {
-        guard isPersistenceWritable else { return }
+    @discardableResult
+    private func persistLocalSourceRecord(_ record: LocalActivitySourceRecord) -> Bool {
         var candidate = productState
         candidate.localActivity = record
-        do {
-            try store.save(candidate)
-            productState = candidate
-        } catch PersistenceError.readOnlyUnsupportedSchema {
-            notePersistenceFailure(.readOnlyUnsupportedSchema)
-        } catch {
-            notePersistenceFailure(.writeFailed)
-        }
+        return persistState(candidate)
     }
 
     private func handleHostWillSleep() {
         dispatchPrecondition(condition: .onQueue(queue))
+        sleeping = true
+        clock.cancel(id: Self.pollTimerID)
+        clock.cancel(id: Self.freshnessTimerID)
+        codex.cancel()
+        pollGeneration &+= 1
+        pollRunning = false
+        pollTerminal = false
+        joinedScheduledPoll = false
+        if !hasRefreshRequest {
+            automaticRefreshPending = persistedBindingIdentifier != nil
+        }
         transferActive = false
-        manualRefreshPending = false
-        queuedManualAfterTransfer = false
         panelTrust = .invalid
         clearReadySession()
         link.noteHostWillSleep()
+    }
+
+    private func handleHostDidWake() {
+        dispatchPrecondition(condition: .onQueue(queue))
+        guard sleeping else { return }
+        sleeping = false
+        automaticRefreshPending = automaticRefreshPending || persistedBindingIdentifier != nil
+        let overdue = pollDeadline.map { $0 <= now() } ?? false
+        pollAttempted = false
+        pollTerminal = false
+        if overdue || needsPollForEnabledSources {
+            startPoll()
+        } else {
+            schedulePollTimer()
+            scheduleFreshnessCheck()
+        }
+        ensureRecovery()
+        processRefreshRequest()
     }
 
     private func notePersistenceFailure(_ error: PersistenceError) {

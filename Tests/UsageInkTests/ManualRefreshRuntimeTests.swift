@@ -8,8 +8,8 @@ final class ManualRefreshRuntimeTests: XCTestCase {
         let harness = try RefreshRuntimeHarness()
         waitStart(harness)
         bindReady(harness)
-        XCTAssertEqual(harness.radio.writes.map(\.data), [Data([DisplayLinkUUIDs.initOpcode])])
-        XCTAssertEqual(harness.box.snapshot?.panelTrust, .invalid)
+        XCTAssertEqual(harness.radio.writes.first?.data, Data([DisplayLinkUUIDs.initOpcode]))
+        XCTAssertEqual(harness.box.snapshot?.panelTrust, .assumed)
 
         let firstTrust = waitFor(harness, "first success") { $0.panelTrust == .assumed }
         harness.runtime.submit(.refreshNow)
@@ -62,8 +62,9 @@ final class ManualRefreshRuntimeTests: XCTestCase {
         let harness = try RefreshRuntimeHarness(codex: .authRequired)
         waitStart(harness)
         bindReady(harness)
+        let writesBeforeManual = harness.radio.writes.count
         harness.runtime.submit(.refreshNow)
-        waitUntilWritesIncludeRefresh(harness)
+        waitUntilWritesIncludeRefresh(harness, minimumWriteCount: writesBeforeManual + 2)
         let frame = try XCTUnwrap(harness.runtime.inFlightFrame)
         XCTAssertEqual(frame.blackPlane.count, 15_000)
         XCTAssertEqual(frame.redPlane.count, 15_000)
@@ -181,9 +182,9 @@ final class ManualRefreshRuntimeTests: XCTestCase {
         let harness = try RefreshRuntimeHarness(codex: .hangThenPro(gate: gate))
         waitStart(harness)
         bindReady(harness)
-        XCTAssertEqual(harness.radio.writes.map(\.data), [Data([DisplayLinkUUIDs.initOpcode])])
+        XCTAssertEqual(harness.radio.writes.first?.data, Data([DisplayLinkUUIDs.initOpcode]))
         harness.runtime.submit(.refreshNow)
-        XCTAssertEqual(harness.radio.writes.map(\.data), [Data([DisplayLinkUUIDs.initOpcode])])
+        XCTAssertEqual(harness.radio.writes.first?.data, Data([DisplayLinkUUIDs.initOpcode]))
         let assumed = waitFor(harness, "after poll") { $0.panelTrust == .assumed }
         gate.signal()
         waitUntilWritesIncludeRefresh(harness)
@@ -206,7 +207,13 @@ final class ManualRefreshRuntimeTests: XCTestCase {
         let ready = waitFor(harness, "ready") { $0.bleLink == .ready && $0.binding == .bound }
         harness.runtime.submit(.bindDisplay(desk))
         wait(for: [ready], timeout: 1.0)
-        XCTAssertEqual(harness.radio.writes.map(\.data), [Data([DisplayLinkUUIDs.initOpcode])])
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        if harness.radio.writes.contains(where: { $0.opcode == DisplayLinkUUIDs.refreshOpcode }) {
+            let assumed = waitFor(harness, "initial assumed") { $0.panelTrust == .assumed }
+            harness.clock.advance(15)
+            wait(for: [assumed], timeout: 1.0)
+        }
+        XCTAssertEqual(harness.radio.writes.first?.data, Data([DisplayLinkUUIDs.initOpcode]))
     }
 
     private func waitUntil(
@@ -296,6 +303,8 @@ private final class RefreshRuntimeHarness {
         runtime = UsageInkRuntime(
             language: .english,
             store: store,
+            now: { clock.date },
+            clock: clock,
             makeLink: { queue in
                 radio.queue = queue
                 clock.queue = queue

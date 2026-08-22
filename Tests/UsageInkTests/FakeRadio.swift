@@ -5,29 +5,59 @@ enum BLETestFixtures {
     static let sampleConfig = Data([8, 7, 6, 5, 4, 3, 2, 1, 0xFF, 0, 1, 0, 1])
 }
 
-final class ManualDisplayClock: DisplayClock {
-    private var now: TimeInterval = 0
+final class ManualDisplayClock: DisplayClock, @unchecked Sendable {
+    private let lock = NSLock()
+    private var elapsed: TimeInterval = 0
+    let origin: Date
     private var tasks: [String: (fireAt: TimeInterval, body: () -> Void)] = [:]
     var queue: DispatchQueue?
 
+    init(origin: Date = Date(timeIntervalSince1970: 0)) {
+        self.origin = origin
+    }
+
+    var date: Date {
+        lock.lock()
+        defer { lock.unlock() }
+        return origin.addingTimeInterval(elapsed)
+    }
+
     func schedule(id: String, after: TimeInterval, _ body: @escaping () -> Void) {
-        tasks[id] = (now + after, body)
+        lock.lock()
+        tasks[id] = (elapsed + after, body)
+        lock.unlock()
     }
 
     func cancel(id: String) {
+        lock.lock()
         tasks[id] = nil
+        lock.unlock()
     }
 
     func cancelAll() {
+        lock.lock()
         tasks.removeAll()
+        lock.unlock()
+    }
+
+    func scheduledDelay(id: String) -> TimeInterval? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let task = tasks[id] else {
+            return nil
+        }
+        return task.fireAt - elapsed
     }
 
     func advance(_ interval: TimeInterval) {
-        now += interval
-        let due = tasks.filter { $0.value.fireAt <= now }
+        lock.lock()
+        elapsed += interval
+        let due = tasks.filter { $0.value.fireAt <= elapsed }
         for key in due.keys {
             tasks[key] = nil
         }
+        let queue = self.queue
+        lock.unlock()
         let run = {
             for item in due.values {
                 item.body()
