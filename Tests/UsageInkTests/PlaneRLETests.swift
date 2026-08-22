@@ -76,8 +76,9 @@ final class PlaneRLETests: XCTestCase {
             ImageTransferPlanner.plan(black: black, red: red, rleAdvertised: true, chunkCapacity: 18)
         )
         XCTAssertEqual(planned.encoding, .rle)
-        let payloads = planned.chunks.filter { !$0.isRefresh }.map { $0.packet.dropFirst(2) }
-        let rleBytes = payloads.reduce(0) { $0 + $1.count }
-        XCTAssertLessThan(rleBytes, black.count + red.count)
+        let raw = try XCTUnwrap(
+            ImageTransferPlanner.plan(black: black, red: red, rleAdvertised: false, chunkCapacity: 18)
+        )
+        XCTAssertLessThan(ImageTransferPlanner.wireLength(planned.chunks), ImageTransferPlanner.wireLength(raw.chunks))
     }
 }

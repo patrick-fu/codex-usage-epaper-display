@@ -35,6 +35,7 @@ protocol DisplayLinkControlling: AnyObject {
     func cancelWork()
     func writeWakeupPin(_ pin: UInt8, sessionGeneration: UInt64, configDigest: Data) -> Bool
     func transferDisplayFrame(blackPlane: Data, redPlane: Data, sessionGeneration: UInt64) -> Bool
+    func noteHostWillSleep()
 }
 
 final class NullDisplayLink: DisplayLinkControlling {
@@ -54,4 +55,6 @@ final class NullDisplayLink: DisplayLinkControlling {
     func transferDisplayFrame(blackPlane: Data, redPlane: Data, sessionGeneration: UInt64) -> Bool {
         false
     }
+
+    func noteHostWillSleep() {}
 }

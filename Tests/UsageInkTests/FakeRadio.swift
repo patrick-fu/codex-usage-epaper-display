@@ -188,6 +188,10 @@ final class FakeRadio: RadioTransport {
         }
     }
 
+    func dropDeferredWriteAcknowledgements() {
+        deferredWriteAcks.removeAll()
+    }
+
     func write(identifier: UUID, characteristic: UUID, data: Data, type: RadioWriteType) {
         if type == .withoutResponse, !canSendWriteWithoutResponse(identifier: identifier) {
             writesRejectedForFlowControl += 1

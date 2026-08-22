@@ -2,6 +2,7 @@ import Foundation
 
 enum RuntimeCommand: Sendable, Equatable {
     case refreshNow
+    case hostWillSleep
     case findAndBindDisplay
     case bindDisplay(UUID)
     case unbindDisplay
@@ -146,10 +147,13 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
     func displayLinkDidUpdateLink(_ state: BLELinkState) {
         dispatchPrecondition(condition: .onQueue(queue))
         bleLink = state
-        if state != .ready {
+        switch state {
+        case .disconnected, .unbound, .unavailable, .unreachable:
             clearReadySession()
-            publish()
+        case .ready, .scanning, .connecting, .discovering, .subscribing, .awaitingConfig, .initializing:
+            break
         }
+        publish()
     }
 
     func displayLinkDidUpdateCandidates(_ candidates: [BindCandidate]) {
@@ -161,7 +165,13 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
     func displayLinkDidClassify(_ classification: BLEClassification) {
         dispatchPrecondition(condition: .onQueue(queue))
         lastBLEClassification = classification
-        clearReadySession()
+        switch classification {
+        case .planeTimeout, .refreshTimeout, .mtuInvalid, .initTimeout,
+             .disconnected, .callbackAmbiguous, .retryExhausted:
+            panelTrust = .invalid
+        default:
+            break
+        }
         publish()
     }
 
@@ -273,6 +283,8 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
         switch command {
         case .refreshNow:
             requestManualRefresh()
+        case .hostWillSleep:
+            handleHostWillSleep()
         case .rebuildLocalMetrics:
             rebuildLocalMetrics()
         case .findAndBindDisplay:
@@ -430,12 +442,9 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
                 )
             }
         } catch PersistenceError.readOnlyUnsupportedSchema {
-            applyLoad(store.load())
-            isPersistenceWritable = false
-            storageClassification = .stateVersionUnsupported
+            notePersistenceFailure(.readOnlyUnsupportedSchema)
         } catch {
-            applyLoad(store.load())
-            storageClassification = .stateWriteFailed
+            notePersistenceFailure(.writeFailed)
         }
     }
 
@@ -594,14 +603,9 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             storageClassification = nil
             isPersistenceWritable = true
         } catch PersistenceError.readOnlyUnsupportedSchema {
-            applyLoad(store.load())
-            isPersistenceWritable = false
-            storageClassification = .stateVersionUnsupported
-            panelTrust = .invalid
+            notePersistenceFailure(.readOnlyUnsupportedSchema)
         } catch {
-            applyLoad(store.load())
-            storageClassification = .stateWriteFailed
-            panelTrust = .invalid
+            notePersistenceFailure(.writeFailed)
         }
     }
 
@@ -712,12 +716,9 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             storageClassification = nil
             isPersistenceWritable = true
         } catch PersistenceError.readOnlyUnsupportedSchema {
-            applyLoad(store.load())
-            isPersistenceWritable = false
-            storageClassification = .stateVersionUnsupported
+            notePersistenceFailure(.readOnlyUnsupportedSchema)
         } catch {
-            applyLoad(store.load())
-            storageClassification = .stateWriteFailed
+            notePersistenceFailure(.writeFailed)
         }
     }
 
@@ -799,10 +800,28 @@ final class UsageInkRuntime: @unchecked Sendable, DisplayLinkDelegate {
             try store.save(candidate)
             productState = candidate
         } catch PersistenceError.readOnlyUnsupportedSchema {
-            applyLoad(store.load())
+            notePersistenceFailure(.readOnlyUnsupportedSchema)
+        } catch {
+            notePersistenceFailure(.writeFailed)
+        }
+    }
+
+    private func handleHostWillSleep() {
+        dispatchPrecondition(condition: .onQueue(queue))
+        transferActive = false
+        manualRefreshPending = false
+        queuedManualAfterTransfer = false
+        panelTrust = .invalid
+        clearReadySession()
+        link.noteHostWillSleep()
+    }
+
+    private func notePersistenceFailure(_ error: PersistenceError) {
+        switch error {
+        case .readOnlyUnsupportedSchema:
             isPersistenceWritable = false
             storageClassification = .stateVersionUnsupported
-        } catch {
+        default:
             storageClassification = .stateWriteFailed
         }
     }

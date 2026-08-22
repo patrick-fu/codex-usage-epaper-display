@@ -83,6 +83,99 @@ final class ManualRefreshRuntimeTests: XCTestCase {
         XCTAssertNotEqual(model.hero?.displayedValue, "0")
     }
 
+    func testQueuedManualRefreshRunsAfterTheInFlightTransfer() throws {
+        let harness = try RefreshRuntimeHarness()
+        waitStart(harness)
+        bindReady(harness)
+        harness.runtime.submit(.refreshNow)
+        waitUntilWritesIncludeRefresh(harness)
+        let writesDuringFirst = harness.radio.writes.count
+        harness.runtime.submit(.refreshNow)
+        XCTAssertEqual(harness.radio.writes.count, writesDuringFirst)
+        let assumed = waitFor(harness, "first assumed") { $0.panelTrust == .assumed }
+        harness.clock.advance(15)
+        wait(for: [assumed], timeout: 1.0)
+        waitUntilWritesIncludeRefresh(harness, minimumWriteCount: writesDuringFirst + 2)
+        XCTAssertGreaterThan(harness.radio.writes.count, writesDuringFirst)
+        harness.clock.advance(15)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertEqual(harness.box.snapshot?.panelTrust, .assumed)
+        XCTAssertTrue(loadedState(harness).setupDone)
+    }
+
+    func testOrdinaryTransferFailureKeepsReadySessionSoManualCanRetry() throws {
+        let harness = try RefreshRuntimeHarness()
+        waitStart(harness)
+        bindReady(harness)
+        let firstSuccess = waitFor(harness, "assumed") { $0.panelTrust == .assumed }
+        harness.runtime.submit(.refreshNow)
+        waitUntilWritesIncludeRefresh(harness)
+        harness.clock.advance(15)
+        wait(for: [firstSuccess], timeout: 1.0)
+        let record = loadedState(harness).refreshRecord
+
+        let writesAfterSuccess = harness.radio.writes.count
+        harness.radio.holdWriteAcknowledgements = true
+        harness.radio.peripherals[desk]?.autoMTUText = nil
+        harness.runtime.submit(.refreshNow)
+        waitUntil { harness.radio.writes.count > writesAfterSuccess }
+        harness.radio.dropDeferredWriteAcknowledgements()
+        harness.clock.advance(30)
+        waitUntil { harness.box.snapshot?.bleLink == .initializing }
+        harness.radio.dropDeferredWriteAcknowledgements()
+        harness.radio.emitValue(
+            identifier: desk,
+            characteristic: DisplayLinkUUIDs.data,
+            value: Data("mtu=185".utf8)
+        )
+        waitUntil { harness.box.snapshot?.bleLink == .ready }
+        harness.radio.dropDeferredWriteAcknowledgements()
+        let failed = waitFor(harness, "failed") { $0.panelTrust == .invalid && $0.lastBLEClassification == .planeTimeout }
+        harness.clock.advance(30)
+        wait(for: [failed], timeout: 1.0)
+        XCTAssertEqual(harness.box.snapshot?.bleLink, .ready)
+        XCTAssertTrue(harness.box.snapshot?.hasReadyWakeupConfiguration ?? false)
+        XCTAssertEqual(loadedState(harness).refreshRecord.lastSucceededFingerprint, record.lastSucceededFingerprint)
+
+        harness.radio.dropDeferredWriteAcknowledgements()
+        harness.radio.holdWriteAcknowledgements = false
+        harness.runtime.submit(.refreshNow)
+        waitUntilWritesIncludeRefresh(harness)
+        XCTAssertTrue(harness.radio.writes.contains { $0.opcode == DisplayLinkUUIDs.refreshOpcode })
+    }
+
+    func testHostSleepInvalidatesTrustAndCancelsObservation() throws {
+        let harness = try RefreshRuntimeHarness()
+        waitStart(harness)
+        bindReady(harness)
+        harness.runtime.submit(.refreshNow)
+        waitUntilWritesIncludeRefresh(harness)
+        let slept = waitFor(harness, "sleep") { $0.panelTrust == .invalid && $0.bleLink != .ready }
+        harness.runtime.submit(.hostWillSleep)
+        wait(for: [slept], timeout: 1.0)
+        harness.clock.advance(15)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertEqual(harness.box.snapshot?.panelTrust, .invalid)
+        XCTAssertFalse(harness.box.snapshot?.hasReadyWakeupConfiguration ?? true)
+        XCTAssertNotEqual(harness.box.snapshot?.bleLink, .ready)
+    }
+
+    func testPersistenceFailureKeepsLiveBLESession() throws {
+        let harness = try RefreshRuntimeHarness()
+        waitStart(harness)
+        bindReady(harness)
+        XCTAssertEqual(harness.box.snapshot?.bleLink, .ready)
+        harness.store.simulatedSaveError = .writeFailed
+        var next = DisplayPreferences.default
+        next.title = "INK BOARD"
+        let classified = waitFor(harness, "write-failed") { $0.storageClassification == .stateWriteFailed }
+        harness.runtime.submit(.savePreferences(next))
+        wait(for: [classified], timeout: 1.0)
+        XCTAssertEqual(harness.box.snapshot?.bleLink, .ready)
+        XCTAssertTrue(harness.box.snapshot?.hasReadyWakeupConfiguration ?? false)
+        XCTAssertNotEqual(harness.box.snapshot?.preferences.title, "INK BOARD")
+    }
+
     func testManualRefreshJoinsActivePollBeforeTransfer() throws {
         let gate = DispatchSemaphore(value: 0)
         let harness = try RefreshRuntimeHarness(codex: .hangThenPro(gate: gate))
@@ -114,6 +207,21 @@ final class ManualRefreshRuntimeTests: XCTestCase {
         harness.runtime.submit(.bindDisplay(desk))
         wait(for: [ready], timeout: 1.0)
         XCTAssertEqual(harness.radio.writes.map(\.data), [Data([DisplayLinkUUIDs.initOpcode])])
+    }
+
+    private func waitUntil(
+        _ file: StaticString = #filePath,
+        line: UInt = #line,
+        _ condition: @escaping () -> Bool
+    ) {
+        let deadline = Date().addingTimeInterval(1.0)
+        while Date() < deadline {
+            if condition() {
+                return
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        XCTFail("condition not met", file: file, line: line)
     }
 
     private func waitUntilWritesIncludeRefresh(
@@ -170,6 +278,7 @@ private enum RefreshCodex {
 
 private final class RefreshRuntimeHarness {
     let root: URL
+    let store: PersistenceStore
     let radio = FakeRadio()
     let clock = ManualDisplayClock()
     let box = RefreshSnapshotProbe()
@@ -179,12 +288,14 @@ private final class RefreshRuntimeHarness {
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("usageink-refresh-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        store = PersistenceStore(root: root)
         let radio = self.radio
         let clock = self.clock
         let box = self.box
+        let store = self.store
         runtime = UsageInkRuntime(
             language: .english,
-            store: PersistenceStore(root: root),
+            store: store,
             makeLink: { queue in
                 radio.queue = queue
                 clock.queue = queue

@@ -112,6 +112,10 @@ enum PersistenceLocation {
     }
 }
 
+private final class SaveErrorSlot: @unchecked Sendable {
+    var value: PersistenceError?
+}
+
 struct PersistenceStore: Sendable {
     static let stateFileName = "state.json"
     static let quarantineFileName = "state.json.quarantine"
@@ -123,7 +127,12 @@ struct PersistenceStore: Sendable {
     var root: URL
     var now: @Sendable () -> Date
     var isExecutable: @Sendable (String) -> Bool
-    var simulatedSaveError: PersistenceError?
+    private let saveErrorSlot = SaveErrorSlot()
+
+    var simulatedSaveError: PersistenceError? {
+        get { saveErrorSlot.value }
+        nonmutating set { saveErrorSlot.value = newValue }
+    }
 
     init(
         root: URL = PersistenceLocation.resolvedRoot(),
@@ -134,7 +143,7 @@ struct PersistenceStore: Sendable {
         self.root = root
         self.now = now
         self.isExecutable = isExecutable
-        self.simulatedSaveError = simulatedSaveError
+        self.saveErrorSlot.value = simulatedSaveError
     }
 
     var stateURL: URL { root.appendingPathComponent(Self.stateFileName) }

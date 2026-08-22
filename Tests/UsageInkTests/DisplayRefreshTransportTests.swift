@@ -149,7 +149,148 @@ final class DisplayRefreshTransportTests: XCTestCase {
         XCTAssertFalse(harness.completed)
     }
 
-    private func bindReady(_ harness: RefreshHarness, rle: Bool) {
+    func testFirstFlagsOnlyAppearOnTheFirstChunkOfEachPlane() {
+        let harness = RefreshHarness()
+        harness.radio.maximumWriteWithoutResponse = 20
+        harness.radio.maximumWriteWithResponse = 20
+        bindReady(harness, rle: false)
+        XCTAssertTrue(
+            harness.coordinator.transferDisplayFrame(
+                blackPlane: Data(repeating: 0x00, count: 15_000),
+                redPlane: Data(repeating: 0xFF, count: 15_000),
+                sessionGeneration: harness.session!.generation
+            )
+        )
+        let imageWrites = Array(harness.radio.writes.dropFirst())
+        let decoded = try! decodeImageWrites(imageWrites, expectedCapacity: 18)
+        XCTAssertGreaterThan(decoded.blackFlags.count, 1)
+        XCTAssertGreaterThan(decoded.redFlags.count, 1)
+        XCTAssertEqual(decoded.blackFlags.first, DisplayLinkUUIDs.writeImageFlagFirst)
+        XCTAssertEqual(decoded.redFlags.first, DisplayLinkUUIDs.writeImageFlagFirst | DisplayLinkUUIDs.writeImageFlagRed)
+        for flag in decoded.blackFlags.dropFirst() {
+            XCTAssertEqual(flag & DisplayLinkUUIDs.writeImageFlagFirst, 0)
+            XCTAssertEqual(flag & DisplayLinkUUIDs.writeImageFlagRed, 0)
+        }
+        for flag in decoded.redFlags.dropFirst() {
+            XCTAssertEqual(flag & DisplayLinkUUIDs.writeImageFlagFirst, 0)
+            XCTAssertEqual(flag & DisplayLinkUUIDs.writeImageFlagRed, DisplayLinkUUIDs.writeImageFlagRed)
+        }
+        XCTAssertTrue(decoded.blackFlushWithResponse)
+        XCTAssertTrue(decoded.redFlushWithResponse)
+    }
+
+    func testInvalidCapacityFailsTransferInsteadOfSilentReturn() {
+        let harness = RefreshHarness()
+        harness.radio.maximumWriteWithoutResponse = 2
+        harness.radio.maximumWriteWithResponse = 2
+        bindReady(harness, rle: false)
+        let started = harness.coordinator.transferDisplayFrame(
+            blackPlane: Data(repeating: 0x00, count: 15_000),
+            redPlane: Data(repeating: 0xFF, count: 15_000),
+            sessionGeneration: harness.session!.generation
+        )
+        XCTAssertFalse(started)
+        XCTAssertEqual(harness.classification, .mtuInvalid)
+        XCTAssertNotEqual(harness.link, .ready)
+        XCTAssertFalse(harness.completed)
+    }
+
+    func testSameSessionRetryWaitsForFreshMTUBeforeResendingPlanes() {
+        let harness = RefreshHarness()
+        harness.radio.maximumWriteWithoutResponse = 20
+        harness.radio.maximumWriteWithResponse = 20
+        bindReady(harness, rle: false)
+        harness.radio.peripherals[desk]?.autoMTUText = nil
+        harness.radio.holdWriteAcknowledgements = true
+        XCTAssertTrue(
+            harness.coordinator.transferDisplayFrame(
+                blackPlane: Data(repeating: 0x00, count: 15_000),
+                redPlane: Data(repeating: 0xFF, count: 15_000),
+                sessionGeneration: harness.session!.generation
+            )
+        )
+        XCTAssertTrue(harness.radio.writes.contains { $0.opcode == DisplayLinkUUIDs.writeImageOpcode })
+        harness.radio.dropDeferredWriteAcknowledgements()
+        let writesBeforeRetry = harness.radio.writes.count
+        harness.clock.advance(30)
+        XCTAssertEqual(harness.link, .initializing)
+        XCTAssertEqual(harness.radio.writes.last?.data, Data([DisplayLinkUUIDs.initOpcode]))
+        XCTAssertEqual(harness.classification, .planeTimeout)
+        harness.radio.acknowledgeNextWrite()
+        XCTAssertEqual(harness.radio.writes.count, writesBeforeRetry + 1)
+        XCTAssertFalse(harness.radio.writes.dropFirst(writesBeforeRetry + 1).contains { $0.opcode == DisplayLinkUUIDs.writeImageOpcode })
+        harness.radio.dropDeferredWriteAcknowledgements()
+        harness.radio.holdWriteAcknowledgements = false
+        harness.radio.emitValue(
+            identifier: desk,
+            characteristic: DisplayLinkUUIDs.data,
+            value: Data("mtu=185 rle=1 t=9".utf8)
+        )
+        XCTAssertEqual(harness.link, .ready)
+        let retryWrites = Array(harness.radio.writes.dropFirst(writesBeforeRetry + 1))
+        XCTAssertTrue(retryWrites.contains { $0.opcode == DisplayLinkUUIDs.writeImageOpcode })
+        XCTAssertEqual(retryWrites.last?.data, Data([DisplayLinkUUIDs.refreshOpcode]))
+        XCTAssertTrue(retryWrites.last?.withResponse ?? false)
+        let decoded = try! decodeImageWrites(retryWrites, expectedCapacity: 18)
+        XCTAssertEqual(decoded.black.count, 15_000)
+        XCTAssertEqual(decoded.red.count, 15_000)
+        XCTAssertTrue(decoded.usedRLE)
+        XCTAssertTrue(decoded.blackFlushWithResponse)
+        XCTAssertTrue(decoded.redFlushWithResponse)
+        XCTAssertFalse(harness.completed)
+        harness.clock.advance(15)
+        XCTAssertTrue(harness.completed)
+    }
+
+    func testRetryExhaustedFailsTransferAndKeepsNoSuccess() {
+        let harness = RefreshHarness()
+        harness.radio.maximumWriteWithoutResponse = 20
+        harness.radio.maximumWriteWithResponse = 20
+        bindReady(harness, rle: false)
+        harness.radio.holdWriteAcknowledgements = true
+        XCTAssertTrue(
+            harness.coordinator.transferDisplayFrame(
+                blackPlane: Data(repeating: 0x00, count: 15_000),
+                redPlane: Data(repeating: 0xFF, count: 15_000),
+                sessionGeneration: harness.session!.generation
+            )
+        )
+        harness.radio.dropDeferredWriteAcknowledgements()
+        harness.clock.advance(30)
+        XCTAssertEqual(harness.link, .initializing)
+        harness.radio.dropDeferredWriteAcknowledgements()
+        harness.radio.emitValue(
+            identifier: desk,
+            characteristic: DisplayLinkUUIDs.data,
+            value: Data("mtu=185".utf8)
+        )
+        XCTAssertEqual(harness.link, .ready)
+        harness.radio.dropDeferredWriteAcknowledgements()
+        harness.clock.advance(30)
+        XCTAssertEqual(harness.failed, .planeTimeout)
+        XCTAssertFalse(harness.completed)
+        XCTAssertEqual(harness.link, .ready)
+    }
+
+    func testHostSleepCancelsObservationAndDropsReadySession() {
+        let harness = RefreshHarness()
+        bindReady(harness, rle: false)
+        XCTAssertTrue(
+            harness.coordinator.transferDisplayFrame(
+                blackPlane: Data(repeating: 0x00, count: 15_000),
+                redPlane: Data(repeating: 0xFF, count: 15_000),
+                sessionGeneration: harness.session!.generation
+            )
+        )
+        XCTAssertFalse(harness.completed)
+        harness.coordinator.noteHostWillSleep()
+        XCTAssertEqual(harness.failed, .disconnected)
+        XCTAssertNotEqual(harness.link, .ready)
+        harness.clock.advance(15)
+        XCTAssertFalse(harness.completed)
+    }
+
+        private func bindReady(_ harness: RefreshHarness, rle: Bool) {
         var spec = FakePeripheralSpec()
         spec.autoMTUText = rle ? "mtu=185 rle=1 t=1" : "mtu=185"
         harness.radio.peripherals[desk] = spec
@@ -282,6 +423,7 @@ private final class RefreshHarness: DisplayLinkDelegate {
     var session: ReadyBLESession?
     var completed = false
     var failed: BLEClassification?
+    var classification: BLEClassification?
 
     init() {
         coordinator = ReadySessionCoordinator(radio: radio, clock: clock)
@@ -291,7 +433,7 @@ private final class RefreshHarness: DisplayLinkDelegate {
     func displayLinkDidChangeAvailability(_ availability: RadioAvailability) {}
     func displayLinkDidUpdateLink(_ state: BLELinkState) { link = state }
     func displayLinkDidUpdateCandidates(_ candidates: [BindCandidate]) {}
-    func displayLinkDidClassify(_ classification: BLEClassification) {}
+    func displayLinkDidClassify(_ classification: BLEClassification) { self.classification = classification }
     func displayLinkDidBecomeReady(_ session: ReadyBLESession) { self.session = session }
     func displayLinkDidDisconnect() {}
     func displayLinkDidUpdateReadyConfig(_ config: EPDConfig) { session?.config = config }
