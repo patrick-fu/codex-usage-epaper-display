@@ -124,9 +124,10 @@ enum FrameRasterizer {
             languageCode: lang,
             ctx: ctx
         )
+        let hasLocals = model.primary != nil || !model.secondary.isEmpty
         let hasQuotas = !model.quotas.isEmpty
         let hasSecondary = !model.secondary.isEmpty
-        if model.primary == nil && model.quotas.isEmpty, let mark = model.unavailableMark {
+        if !hasLocals && !hasQuotas, let mark = model.unavailableMark {
             drawCentered(
                 mark,
                 font: font(size: ActivityFocusLayout.secondaryValueFontSize, languageCode: lang, heavy: true, monoDigits: false),
@@ -135,79 +136,91 @@ enum FrameRasterizer {
                 ctx: ctx
             )
         } else {
-            let local = ActivityFocusLayout.localRegionRect(hasQuotas: hasQuotas)
-            fillRule(
-                CGRect(x: local.minX, y: local.minY, width: local.width, height: ActivityFocusLayout.strongRule),
-                ctx: ctx
-            )
-            fillRule(
-                CGRect(x: local.minX, y: local.maxY - ActivityFocusLayout.strongRule, width: local.width, height: ActivityFocusLayout.strongRule),
-                ctx: ctx
-            )
-            fillRule(
-                CGRect(x: local.minX, y: local.minY, width: ActivityFocusLayout.strongRule, height: local.height),
-                ctx: ctx
-            )
-            fillRule(
-                CGRect(x: local.maxX - ActivityFocusLayout.strongRule, y: local.minY, width: ActivityFocusLayout.strongRule, height: local.height),
-                ctx: ctx
-            )
-            if let primary = model.primary {
-                drawMetricCell(
-                    primary,
-                    in: ActivityFocusLayout.primaryRect(hasSecondary: hasSecondary, hasQuotas: hasQuotas),
-                    valueSize: ActivityFocusLayout.primaryValueFontSize,
-                    labelSize: ActivityFocusLayout.metricLabelFontSize,
-                    languageCode: lang,
+            if hasLocals {
+                let local = ActivityFocusLayout.localRegionRect(hasLocals: true, hasQuotas: hasQuotas)
+                fillRule(
+                    CGRect(x: local.minX, y: local.minY, width: local.width, height: ActivityFocusLayout.strongRule),
                     ctx: ctx
                 )
-            }
-            let secondaryRects = ActivityFocusLayout.secondaryRects(count: model.secondary.count, hasQuotas: hasQuotas)
-            for (index, field) in model.secondary.enumerated() {
-                let cell = secondaryRects[index]
-                if index == 0 {
-                    fillRule(
-                        CGRect(
-                            x: cell.minX,
-                            y: local.minY + ActivityFocusLayout.strongRule,
-                            width: ActivityFocusLayout.normalRule,
-                            height: local.height - 2 * ActivityFocusLayout.strongRule
-                        ),
+                fillRule(
+                    CGRect(x: local.minX, y: local.maxY - ActivityFocusLayout.strongRule, width: local.width, height: ActivityFocusLayout.strongRule),
+                    ctx: ctx
+                )
+                fillRule(
+                    CGRect(x: local.minX, y: local.minY, width: ActivityFocusLayout.strongRule, height: local.height),
+                    ctx: ctx
+                )
+                fillRule(
+                    CGRect(x: local.maxX - ActivityFocusLayout.strongRule, y: local.minY, width: ActivityFocusLayout.strongRule, height: local.height),
+                    ctx: ctx
+                )
+                if let primary = model.primary {
+                    drawMetricCell(
+                        primary,
+                        in: ActivityFocusLayout.primaryRect(hasSecondary: hasSecondary, hasQuotas: hasQuotas),
+                        valueSize: ActivityFocusLayout.primaryValueFontSize,
+                        labelSize: ActivityFocusLayout.metricLabelFontSize,
+                        inset: ActivityFocusLayout.cellInset,
+                        languageCode: lang,
                         ctx: ctx
                     )
                 }
-                if index > 0 {
-                    fillRule(
-                        CGRect(x: cell.minX, y: cell.minY, width: cell.width, height: ActivityFocusLayout.normalRule),
+                let secondaryRects = ActivityFocusLayout.secondaryRects(count: model.secondary.count, hasQuotas: hasQuotas)
+                for (index, field) in model.secondary.enumerated() {
+                    let cell = secondaryRects[index]
+                    if index == 0 {
+                        fillRule(
+                            CGRect(
+                                x: cell.minX,
+                                y: local.minY + ActivityFocusLayout.strongRule,
+                                width: ActivityFocusLayout.normalRule,
+                                height: local.height - 2 * ActivityFocusLayout.strongRule
+                            ),
+                            ctx: ctx
+                        )
+                    }
+                    if index > 0 {
+                        fillRule(
+                            CGRect(x: cell.minX, y: cell.minY, width: cell.width, height: ActivityFocusLayout.normalRule),
+                            ctx: ctx
+                        )
+                    }
+                    drawMetricCell(
+                        field,
+                        in: cell,
+                        valueSize: ActivityFocusLayout.secondaryValueFontSize,
+                        labelSize: ActivityFocusLayout.metricLabelFontSize,
+                        inset: ActivityFocusLayout.cellInset,
+                        languageCode: lang,
                         ctx: ctx
                     )
                 }
-                drawMetricCell(
-                    field,
-                    in: cell,
-                    valueSize: ActivityFocusLayout.secondaryValueFontSize,
-                    labelSize: ActivityFocusLayout.metricLabelFontSize,
-                    languageCode: lang,
-                    ctx: ctx
-                )
             }
             if hasQuotas {
-                fillRule(ActivityFocusLayout.quotaTopRuleRect, ctx: ctx)
-                let quotaRects = ActivityFocusLayout.quotaRects(count: model.quotas.count)
+                if hasLocals {
+                    fillRule(ActivityFocusLayout.quotaTopRuleRect(hasLocals: true), ctx: ctx)
+                }
+                let quotaRects = ActivityFocusLayout.quotaRects(count: model.quotas.count, hasLocals: hasLocals)
                 for (index, field) in model.quotas.enumerated() {
                     let cell = quotaRects[index]
                     if index > 0 {
                         fillRule(
                             CGRect(
                                 x: cell.minX,
-                                y: cell.minY + ActivityFocusLayout.strongRule,
+                                y: cell.minY + (hasLocals ? ActivityFocusLayout.strongRule : 0),
                                 width: ActivityFocusLayout.normalRule,
-                                height: cell.height - ActivityFocusLayout.strongRule
+                                height: cell.height - (hasLocals ? ActivityFocusLayout.strongRule : 0)
                             ),
                             ctx: ctx
                         )
                     }
-                    drawQuotaCell(field, in: cell, languageCode: lang, ctx: ctx)
+                    drawQuotaCell(
+                        field,
+                        in: cell,
+                        languageCode: lang,
+                        ctx: ctx,
+                        inset: ActivityFocusLayout.cellInset
+                    )
                 }
             }
         }
@@ -242,13 +255,21 @@ enum FrameRasterizer {
                 )
             }
             if field.isQuota {
-                drawQuotaCell(field, in: cell, languageCode: languageCode, ctx: ctx, quotaValueSize: BalancedLayout.quotaValueFontSize)
+                drawQuotaCell(
+                    field,
+                    in: cell,
+                    languageCode: languageCode,
+                    ctx: ctx,
+                    inset: BalancedLayout.cellInset,
+                    quotaValueSize: BalancedLayout.quotaValueFontSize
+                )
             } else {
                 drawMetricCell(
                     field,
                     in: cell,
                     valueSize: BalancedLayout.metricValueFontSize,
                     labelSize: BalancedLayout.metricLabelFontSize,
+                    inset: BalancedLayout.cellInset,
                     languageCode: languageCode,
                     ctx: ctx
                 )
@@ -261,20 +282,17 @@ enum FrameRasterizer {
         in cell: CGRect,
         languageCode: String,
         ctx: CGContext,
+        inset: Int,
         quotaValueSize: CGFloat = ActivityFocusLayout.quotaValueFontSize
     ) {
-        let inset = CGRect(
-            x: cell.minX + 6,
-            y: cell.minY + 6,
-            width: max(0, cell.width - 12),
-            height: max(0, cell.height - 12)
-        )
+        let content = DisplayCellGeometry.insetRect(in: cell, inset: inset)
+        let (labelRect, resetRect) = DisplayCellGeometry.splitLeadingRow(content, height: 14)
         let ink = field.usesRed ? red : black
         drawText(
             field.label,
             font: font(size: 11, languageCode: languageCode, heavy: true, monoDigits: false),
             color: black,
-            in: CGRect(x: inset.minX, y: inset.minY, width: inset.width * 0.55, height: 14),
+            in: labelRect,
             align: .left,
             ctx: ctx
         )
@@ -283,24 +301,24 @@ enum FrameRasterizer {
                 secondary,
                 font: font(size: 9, languageCode: languageCode, heavy: false, monoDigits: false),
                 color: black,
-                in: CGRect(x: inset.minX + inset.width * 0.4, y: inset.minY, width: inset.width * 0.6, height: 14),
+                in: resetRect,
                 align: .right,
                 ctx: ctx
             )
         }
-        var valueBottom = inset.maxY
+        var valueBottom = content.maxY
         if let percent = field.progressPercent {
             let track = CGRect(
-                x: inset.minX,
-                y: inset.maxY - 8,
-                width: inset.width,
+                x: content.minX,
+                y: content.maxY - 8,
+                width: content.width,
                 height: 8
             )
             drawProgress(percent: percent, in: track, fill: ink, ctx: ctx)
             valueBottom = track.minY - 2
         }
         if let badge = field.badge {
-            let badgeRect = CGRect(x: inset.minX, y: valueBottom - 12, width: inset.width, height: 12)
+            let badgeRect = CGRect(x: content.minX, y: valueBottom - 12, width: content.width, height: 12)
             drawText(
                 badge,
                 font: font(size: 9, languageCode: languageCode, heavy: false, monoDigits: false),
@@ -315,7 +333,7 @@ enum FrameRasterizer {
             field.displayedValue,
             font: font(size: quotaValueSize, languageCode: languageCode, heavy: true, monoDigits: true),
             color: ink,
-            in: CGRect(x: inset.minX, y: inset.minY + 16, width: inset.width, height: max(0, valueBottom - (inset.minY + 16))),
+            in: CGRect(x: content.minX, y: content.minY + 16, width: content.width, height: max(0, valueBottom - (content.minY + 16))),
             align: .left,
             ctx: ctx
         )
@@ -326,26 +344,22 @@ enum FrameRasterizer {
         in cell: CGRect,
         valueSize: CGFloat,
         labelSize: CGFloat,
+        inset: Int,
         languageCode: String,
         ctx: CGContext
     ) {
-        let inset = CGRect(
-            x: cell.minX + 6,
-            y: cell.minY + 6,
-            width: max(0, cell.width - 12),
-            height: max(0, cell.height - 12)
-        )
+        let content = DisplayCellGeometry.insetRect(in: cell, inset: inset)
         drawText(
             field.label,
             font: font(size: labelSize, languageCode: languageCode, heavy: true, monoDigits: false),
             color: black,
-            in: CGRect(x: inset.minX, y: inset.minY, width: inset.width, height: 14),
+            in: CGRect(x: content.minX, y: content.minY, width: content.width, height: 14),
             align: .left,
             ctx: ctx
         )
-        var valueBottom = inset.maxY
+        var valueBottom = content.maxY
         if let badge = field.badge {
-            let badgeRect = CGRect(x: inset.minX, y: inset.maxY - 12, width: inset.width, height: 12)
+            let badgeRect = CGRect(x: content.minX, y: content.maxY - 12, width: content.width, height: 12)
             drawText(
                 badge,
                 font: font(size: 9, languageCode: languageCode, heavy: false, monoDigits: false),
@@ -360,7 +374,7 @@ enum FrameRasterizer {
             field.displayedValue,
             font: font(size: valueSize, languageCode: languageCode, heavy: true, monoDigits: true),
             color: black,
-            in: CGRect(x: inset.minX, y: inset.minY + 16, width: inset.width, height: max(0, valueBottom - (inset.minY + 16))),
+            in: CGRect(x: content.minX, y: content.minY + 16, width: content.width, height: max(0, valueBottom - (content.minY + 16))),
             align: .left,
             ctx: ctx
         )

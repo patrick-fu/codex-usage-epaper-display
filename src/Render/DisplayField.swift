@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 struct DisplayField: Sendable, Equatable {
@@ -30,6 +31,29 @@ enum IntegerSplit {
         return (0..<count).map { index in
             base + (index < remainder ? 1 : 0)
         }
+    }
+}
+
+enum DisplayCellGeometry {
+    static func insetRect(in cell: CGRect, inset: Int) -> CGRect {
+        let x = Int(cell.minX) + inset
+        let y = Int(cell.minY) + inset
+        return CGRect(
+            x: x,
+            y: y,
+            width: max(0, Int(cell.width) - 2 * inset),
+            height: max(0, Int(cell.height) - 2 * inset)
+        )
+    }
+
+    static func splitLeadingRow(_ rect: CGRect, height: Int) -> (left: CGRect, right: CGRect) {
+        let widths = IntegerSplit.split(Int(rect.width), into: 2)
+        let x = Int(rect.minX)
+        let y = Int(rect.minY)
+        return (
+            CGRect(x: x, y: y, width: widths[0], height: height),
+            CGRect(x: x + widths[0], y: y, width: widths[1], height: height)
+        )
     }
 }
 

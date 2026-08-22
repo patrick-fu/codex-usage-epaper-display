@@ -20,8 +20,9 @@ enum BalancedLayout {
     static let columnCount = 2
     static let normalRule: CGFloat = 1
     static let strongRule: CGFloat = 2
-    static let cellHorizontalInset: CGFloat = 6
-    static let cellVerticalInset: CGFloat = 6
+    static let cellInset = 6
+    static var cellHorizontalInset: Int { cellInset }
+    static var cellVerticalInset: Int { cellInset }
     static let progressTrackHeight: CGFloat = 6
     static let badgeHeight: CGFloat = 12
 
@@ -88,11 +89,6 @@ enum BalancedLayout {
     }
 
     static func contentRect(in cell: CGRect) -> CGRect {
-        CGRect(
-            x: cell.minX + cellHorizontalInset,
-            y: cell.minY + cellVerticalInset,
-            width: cell.width - 2 * cellHorizontalInset,
-            height: cell.height - 2 * cellVerticalInset
-        )
+        DisplayCellGeometry.insetRect(in: cell, inset: cellInset)
     }
 }

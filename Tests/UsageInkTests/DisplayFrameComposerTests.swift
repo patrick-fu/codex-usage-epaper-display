@@ -50,6 +50,35 @@ final class DisplayFrameComposerTests: XCTestCase {
         XCTAssertFalse(DisplayFrameFixtures.contains(.red, in: primary, frame: frame))
     }
 
+    func testActivityFocusWithoutLocalsFillsBodyWithQuotas() throws {
+        var preferences = DisplayPreferences.default
+        preferences.displayStyle = .activityFocus
+        preferences.modules.today = false
+        preferences.modules.weekTokens = false
+        preferences.modules.cache = false
+        preferences.modules.tps = false
+        let input = DisplayFrameFixtures.input(preferences: preferences)
+        let model = ActivityFocusModelBuilder.build(input)
+        XCTAssertNil(model.primary)
+        XCTAssertEqual(model.secondary, [])
+        XCTAssertFalse(model.quotas.isEmpty)
+        XCTAssertNil(model.unavailableMark)
+
+        let frame = try DisplayFrameComposer.compose(input)
+        let quotas = ActivityFocusLayout.quotaRects(count: 2, hasLocals: false)
+        XCTAssertEqual(quotas[0].minY, 41)
+        XCTAssertEqual(quotas[0].height, 223)
+        XCTAssertTrue(DisplayFrameFixtures.contains(.black, in: quotas[0], frame: frame))
+        XCTAssertTrue(DisplayFrameFixtures.contains(.red, in: quotas[1], frame: frame))
+
+        let abandonedLocal = ActivityFocusLayout.localRegionRect(hasLocals: true, hasQuotas: true)
+        XCTAssertTrue(
+            DisplayFrameFixtures.contains(.black, in: abandonedLocal, frame: frame),
+            "quota cells must occupy the former empty local band"
+        )
+        XCTAssertEqual(ActivityFocusLayout.localRegionHeight(hasLocals: false, hasQuotas: true), 0)
+    }
+
     func testRedAccentAppliesOnlyToQuotaPercentageAndProgress() throws {
         var off = DisplayPreferences.default
         off.redAccent = .off

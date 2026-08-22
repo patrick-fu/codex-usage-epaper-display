@@ -62,10 +62,8 @@ enum BalancedModelBuilder {
 
     static func select(
         preferences: DisplayPreferences,
-        account: AccountObservation,
-        local: LocalActivityObservation = .unknown
+        account: AccountObservation
     ) -> [Item] {
-        _ = local
         let quotaItems = preferences.modules.quota
             ? DisplayFieldFactory.returnedWindows(account.windows).map(DisplayItem.quota)
             : []

@@ -34,4 +34,18 @@ final class BalancedLayoutTests: XCTestCase {
         XCTAssertEqual(BalancedLayout.entryRects(count: 0), [])
         XCTAssertEqual(BalancedLayout.entryRects(count: 9).count, 6)
     }
+
+    func testCellInsetIsIntegerAndLabelResetDoNotOverlap() {
+        XCTAssertEqual(BalancedLayout.cellInset, 6)
+        let cell = BalancedLayout.entryRects(count: 2)[0]
+        let content = DisplayCellGeometry.insetRect(in: cell, inset: BalancedLayout.cellInset)
+        XCTAssertEqual(Int(content.minX), Int(cell.minX) + 6)
+        XCTAssertEqual(Int(content.width), Int(cell.width) - 12)
+        let (label, reset) = DisplayCellGeometry.splitLeadingRow(content, height: 14)
+        XCTAssertEqual(label.maxX, reset.minX)
+        XCTAssertEqual(label.width + reset.width, content.width)
+        XCTAssertLessThanOrEqual(label.maxX, reset.minX)
+        XCTAssertEqual(label.origin.x.rounded(.towardZero), label.origin.x)
+        XCTAssertEqual(reset.origin.x.rounded(.towardZero), reset.origin.x)
+    }
 }

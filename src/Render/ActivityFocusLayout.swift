@@ -22,8 +22,9 @@ enum ActivityFocusLayout {
     static let maxSecondaryCells = 3
     static let normalRule: CGFloat = 1
     static let strongRule: CGFloat = 2
-    static let cellHorizontalInset: CGFloat = 8
-    static let cellVerticalInset: CGFloat = 8
+    static let cellInset = 8
+    static var cellHorizontalInset: Int { cellInset }
+    static var cellVerticalInset: Int { cellInset }
     static let progressTrackHeight: CGFloat = 8
     static let progressBottomInset: CGFloat = 12
 
@@ -61,29 +62,30 @@ enum ActivityFocusLayout {
         IntegerSplit.split(length, into: count)
     }
 
-    static func localRegionHeight(hasQuotas: Bool) -> Int {
-        hasQuotas ? Int(bodyHeight - quotaRowHeight) : Int(bodyHeight)
+    static func localRegionHeight(hasLocals: Bool = true, hasQuotas: Bool) -> Int {
+        guard hasLocals else { return 0 }
+        return hasQuotas ? Int(bodyHeight - quotaRowHeight) : Int(bodyHeight)
     }
 
-    static func localRegionRect(hasQuotas: Bool) -> CGRect {
+    static func localRegionRect(hasLocals: Bool = true, hasQuotas: Bool) -> CGRect {
         CGRect(
             x: bodyRect.minX,
             y: bodyRect.minY,
             width: bodyRect.width,
-            height: CGFloat(localRegionHeight(hasQuotas: hasQuotas))
+            height: CGFloat(localRegionHeight(hasLocals: hasLocals, hasQuotas: hasQuotas))
         )
     }
 
-    static func primaryRect(hasSecondary: Bool, hasQuotas: Bool) -> CGRect {
-        let local = localRegionRect(hasQuotas: hasQuotas)
+    static func primaryRect(hasSecondary: Bool, hasLocals: Bool = true, hasQuotas: Bool) -> CGRect {
+        let local = localRegionRect(hasLocals: hasLocals, hasQuotas: hasQuotas)
         let width = hasSecondary ? primaryColumnWidth : Int(local.width)
         return CGRect(x: local.minX, y: local.minY, width: CGFloat(width), height: local.height)
     }
 
-    static func secondaryRects(count: Int, hasQuotas: Bool) -> [CGRect] {
+    static func secondaryRects(count: Int, hasLocals: Bool = true, hasQuotas: Bool) -> [CGRect] {
         let n = min(max(count, 0), maxSecondaryCells)
         guard n > 0 else { return [] }
-        let local = localRegionRect(hasQuotas: hasQuotas)
+        let local = localRegionRect(hasLocals: hasLocals, hasQuotas: hasQuotas)
         let heights = split(Int(local.height), into: n)
         var y = Int(local.minY)
         return heights.map { height in
@@ -98,10 +100,15 @@ enum ActivityFocusLayout {
         }
     }
 
-    static func quotaRects(count: Int) -> [CGRect] {
+    static func quotaBandHeight(hasLocals: Bool) -> Int {
+        hasLocals ? Int(quotaRowHeight) : Int(bodyHeight)
+    }
+
+    static func quotaRects(count: Int, hasLocals: Bool = true) -> [CGRect] {
         let n = max(count, 0)
         guard n > 0 else { return [] }
-        let y = Int(bodyRect.minY) + localRegionHeight(hasQuotas: true)
+        let height = quotaBandHeight(hasLocals: hasLocals)
+        let y = Int(bodyRect.minY) + localRegionHeight(hasLocals: hasLocals, hasQuotas: true)
         let widths = split(Int(bodyRect.width), into: n)
         var x = Int(bodyRect.minX)
         return widths.map { width in
@@ -109,15 +116,15 @@ enum ActivityFocusLayout {
                 x: x,
                 y: y,
                 width: width,
-                height: Int(quotaRowHeight)
+                height: height
             )
             x += width
             return rect
         }
     }
 
-    static var quotaTopRuleRect: CGRect {
-        let y = Int(bodyRect.minY) + localRegionHeight(hasQuotas: true)
+    static func quotaTopRuleRect(hasLocals: Bool = true) -> CGRect {
+        let y = Int(bodyRect.minY) + localRegionHeight(hasLocals: hasLocals, hasQuotas: true)
         return CGRect(
             x: bodyRect.minX,
             y: CGFloat(y),

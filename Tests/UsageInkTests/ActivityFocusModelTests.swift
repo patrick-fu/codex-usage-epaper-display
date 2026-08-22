@@ -141,4 +141,20 @@ final class ActivityFocusModelTests: XCTestCase {
         XCTAssertEqual(model.secondary.count, 3)
         XCTAssertEqual(model.secondary.last?.id, "local.tps")
     }
+
+    func testDisabledLocalsKeepQuotasWithoutUnavailableMark() {
+        var preferences = DisplayPreferences.default
+        preferences.displayStyle = .activityFocus
+        preferences.modules.today = false
+        preferences.modules.weekTokens = false
+        preferences.modules.cache = false
+        preferences.modules.tps = false
+        let model = ActivityFocusModelBuilder.build(
+            DisplayFrameFixtures.input(preferences: preferences)
+        )
+        XCTAssertNil(model.primary)
+        XCTAssertEqual(model.secondary, [])
+        XCTAssertEqual(model.quotas.map(\.id), ["quota.primary", "quota.secondary"])
+        XCTAssertNil(model.unavailableMark)
+    }
 }

@@ -181,6 +181,6 @@ enum DisplayFramePlaneGoldens {
     static let unavailableRedSHA256 = "bfc5b164e72195f43728bf37b07bce2be21f37d3169c62437c342ce397a9826f"
     static let balancedValidBlackSHA256 = "db3a692e8775dcada1fd43333fdd6a1f905cf039ad59a67847c09e858886e4c0"
     static let balancedValidRedSHA256 = "159b06f13bfd71150af45cb69851eceaaeb77ad6e82ff1af9c0f83db4aed2592"
-    static let activityValidBlackSHA256 = "d8f8d695fab2fa49161f8862e60ba899d2c0385a36448ba3b55e004328cb802b"
-    static let activityValidRedSHA256 = "c5e8037471ae1a187a7fb3ff54329fea3d8d185cb7846756a1d5c05165ab1ab3"
+    static let activityValidBlackSHA256 = "c79d31c2cd824a2a25b7b2b84b1197a573ee96c5774b01718fe1d864098b5b86"
+    static let activityValidRedSHA256 = "530f6def81a4ac6456f6b47c6d61f1657ec155163e782ddda390b1f64cfdcacc"
 }

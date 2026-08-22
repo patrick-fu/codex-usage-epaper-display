@@ -64,4 +64,37 @@ final class ActivityFocusLayoutTests: XCTestCase {
         XCTAssertEqual(two[1].maxY, 264)
         XCTAssertEqual(ActivityFocusLayout.quotaRects(count: 0), [])
     }
+
+    func testCellInsetIsTheAuthoritativeIntegerConstant() {
+        XCTAssertEqual(ActivityFocusLayout.cellInset, 8)
+        XCTAssertEqual(ActivityFocusLayout.cellHorizontalInset, 8)
+        XCTAssertEqual(ActivityFocusLayout.cellVerticalInset, 8)
+    }
+
+    func testQuotaOnlyLayoutReclaimsTheLocalBand() {
+        XCTAssertEqual(ActivityFocusLayout.localRegionHeight(hasLocals: false, hasQuotas: true), 0)
+        XCTAssertEqual(ActivityFocusLayout.localRegionRect(hasLocals: false, hasQuotas: true).height, 0)
+        XCTAssertEqual(ActivityFocusLayout.quotaBandHeight(hasLocals: false), 223)
+        let quotas = ActivityFocusLayout.quotaRects(count: 2, hasLocals: false)
+        XCTAssertEqual(quotas[0], CGRect(x: 14, y: 41, width: 186, height: 223))
+        XCTAssertEqual(quotas[1], CGRect(x: 200, y: 41, width: 186, height: 223))
+        XCTAssertEqual(quotas[1].maxY, 264)
+        XCTAssertEqual(ActivityFocusLayout.quotaRects(count: 2, hasLocals: true)[0].minY, 191)
+    }
+
+    func testQuotaLabelAndResetRectsUseIntegerSplitWithoutOverlap() {
+        let cell = ActivityFocusLayout.quotaRects(count: 2, hasLocals: true)[0]
+        let content = DisplayCellGeometry.insetRect(in: cell, inset: ActivityFocusLayout.cellInset)
+        XCTAssertEqual(content.minX, 22)
+        XCTAssertEqual(content.width, 170)
+        let (label, reset) = DisplayCellGeometry.splitLeadingRow(content, height: 14)
+        XCTAssertEqual(label.maxX, reset.minX)
+        XCTAssertEqual(label.width + reset.width, content.width)
+        XCTAssertEqual(label.minX, content.minX)
+        XCTAssertEqual(reset.maxX, content.maxX)
+        XCTAssertEqual(label.width, 85)
+        XCTAssertEqual(reset.width, 85)
+        XCTAssertEqual(label.origin.x.rounded(.towardZero), label.origin.x)
+        XCTAssertEqual(reset.origin.x.rounded(.towardZero), reset.origin.x)
+    }
 }
