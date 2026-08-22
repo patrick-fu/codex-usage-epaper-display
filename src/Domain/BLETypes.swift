@@ -166,8 +166,11 @@ enum WakeupPin {
 
     static func parse(_ raw: String) -> UInt8? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return nil
+        }
         let lowered = trimmed.lowercased()
-        if lowered.isEmpty || lowered == "disabled" || lowered == "0xff" || lowered == "ff" || lowered == "禁用" {
+        if lowered == "disabled" || lowered == "0xff" || lowered == "禁用" {
             return disabled
         }
         guard let value = UInt8(trimmed), isAllowed(value) else {
